@@ -1,0 +1,15 @@
+{
+  "pythonVersion": "3.13",
+  "include": [
+    "syncplayServer.py",
+    "syncplayClient.py",
+    "setup.py",
+    "test_client.py",
+    "syncplay"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "reportMissingImports": "none",
+  "reportUnknownImportSymbol": "none"
+}

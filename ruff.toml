@@ -1,0 +1,41 @@
+# Ruff configuration for the watch-history proxy code.
+#
+# The original Syncplay sources (syncplayClient.py, syncplay/ui/*, the players,
+# etc.) are intentionally NOT linted: they are upstream code we must not modify.
+# Only the files we added for the Docker watch-history feature are checked.
+#
+# Run from the repo root:
+#   ruff check
+#
+# The target is Python 3.13 (the Docker image uses python:3.13-slim).
+
+target-version = "py313"
+
+# Lint only the files this project owns. The `syncplay/` package itself is
+# upstream, with the single exception of the proxy module we added.
+extend-include = ["syncplay/history.py"]
+
+include = [
+    "test_client.py",
+    "syncplay/history.py",
+]
+
+# The original code is full of legacy patterns; we do not want those rules
+# firing on it, so scope the rule set to what our new code follows.
+[lint]
+# E/F: pycodestyle errors + pyflakes (undefined names, unused imports, ...)
+# I:   import sorting
+# FLY: f-strings over % and .format()
+# B:   bugbear (blind except, mutable defaults, ...)
+select = ["E", "F", "I", "FLY", "B"]
+ignore = [
+    # Blind excepts in the proxy are intentional: the proxy must keep forwarding
+    # traffic and must never crash a client connection over a bookkeeping error.
+    "BLE001",
+]
+
+[lint.pycodestyle]
+# SQL statements are naturally long; wrapping them hurts readability.
+max-line-length = 120
+
+

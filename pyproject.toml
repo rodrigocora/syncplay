@@ -1,0 +1,31 @@
+[project]
+name = "syncplay-history"
+version = "1.7.6"
+description = "Syncplay server + watch-history proxy (Docker)"
+requires-python = ">=3.13"
+# Runtime dependencies for the Docker watch-history feature. These mirror
+# requirements.txt so that `uv sync` reproduces the container's environment
+# 1:1 (the image is built from requirements.txt and is headless -- server +
+# proxy only, no GUI). Keep this list in sync with requirements.txt.
+dependencies = [
+    "certifi>=2018.11.29",
+    "pem>=21.2.0",
+    "twisted[tls]>=16.4.0",
+    "appnope>=1.0.0; sys_platform == 'darwin'",
+    "zope.interface>=4.4.0; sys_platform == 'win32'",
+    "psycopg2-binary>=2.9",
+]
+
+# Optional: the GUI client (PySide + requests). Not used by the headless Docker
+# image. Install for desktop development with `uv sync --extra gui`.
+[project.optional-dependencies]
+gui = [
+    "pyside6; sys_platform == 'darwin' or (sys_platform != 'win32' and python_version >= '3.12')",
+    "pyside2>=5.11.0; sys_platform != 'darwin' and (sys_platform == 'win32' or python_version < '3.12')",
+    "requests>=2.20.0; sys_platform == 'darwin'",
+]
+
+[tool.uv]
+# Use a plain virtualenv (not a uv-managed install layout), matching how the
+# Docker image is built from requirements.txt.
+package = false

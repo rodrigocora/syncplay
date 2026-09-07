@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 import os
+
 import setuptools
 
 from syncplay import projectURL, version as syncplay_version
 
+
 def read(fname):
-    with open(fname, 'r') as f:
+    with open(os.path.join(os.path.dirname(__file__), fname), 'r') as f:
         return f.read()
 
 installRequirements = read('requirements.txt').splitlines() +\

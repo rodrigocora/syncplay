@@ -97,8 +97,54 @@ uninstall-client: u-client u-common
 
 install-server: common server warnings
 
-uninstall-server: u-server u-common
+uninstall: u-server u-common
+
+# --- Docker (watch-history proxy) -----------------------------------------
+CONTAINER   ?= syncplay-history
+IMAGE       ?= syncplay-history
+DOCKER_PORT ?= 12346
+
+# Configuration is split into two files, both bind-mounted into the container
+# and loaded by entrypoint.sh:
+#   config.env    -- non-secret settings (committed)
+#   .secrets.env  -- secrets only (DB_PASS, SYNCPLAY_PASSWORD, ...), gitignored
+# Because the files are mounted and the password is read from inside the
+# container, it never appears on the command line or in 'make -n' output.
+# Real environment variables (docker run -e) override values in these files.
+SECRETS_FILE ?= .secrets.env
+CONFIG_FILE  ?= config.env
+
+# Remove (if present) and start the container, printing logs. Mounts config.env
+# and .secrets.env (if present).
+up:
+	docker rm -f $(CONTAINER) || true
+	docker run -d --name $(CONTAINER) -p $(DOCKER_PORT):$(DOCKER_PORT) \
+		-v $(abspath $(CONFIG_FILE)):/app/config.env:ro \
+		$(if $(wildcard $(SECRETS_FILE)),-v $(abspath $(SECRETS_FILE)):/app/.secrets.env:ro,) \
+		$(IMAGE)
+	docker logs $(CONTAINER)
+
+# Build the image (--no-cache: BuildKit on this host has reused stale COPY
+# layers and shipped the old history.py despite local edits)
+build:
+	docker build --no-cache -t $(IMAGE) .
+
+# Remove and start the container again (no rebuild)
+rerun: up
+
+# Build the image, then remove and start the container
+rebuild: build up
+
+# Show recent debug/traceback lines from the container (wide tail: a real
+# client sends a State ping every ~1s, which would otherwise push the early
+# Hello/Set lines off a small window)
+logs:
+	docker logs --tail 500 $(CONTAINER)
+
+# Stop and remove the container
+down:
+	docker rm -f $(CONTAINER) || true
 
 install: common client server warnings
 
-uninstall: u-client u-server u-common
+uninstall: u-server u-common
