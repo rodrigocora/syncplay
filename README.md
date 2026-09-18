@@ -42,6 +42,51 @@ When a new person joins they will also be synchronised. Syncplay also includes t
 
 Syncplay is not a file sharing service.
 
+## Watch history (this fork)
+
+This fork adds a **watch-history** feature: a single Docker container runs the unmodified Syncplay server behind a tiny transparent TCP proxy. The proxy forwards all client traffic unchanged while recording what is being watched into a database. No client-side changes are required — existing clients just point at the proxy port.
+
+It records:
+
+- `users` — every username that has ever connected.
+- `watch_history` — one row per (room, file): file name, size, duration, furthest position reached (`watched`, seconds), `percentage`, and timestamps.
+
+### Quick start (Docker Compose)
+
+```sh
+cp secrets.env.example .secrets.env   # only needed when using a server database
+docker compose up -d --build
+```
+
+Clients connect to port **12346** (the proxy). The database defaults to SQLite inside the container, persisted in the named volume (`syncplay_syncplay_history_data` — the compose project prefix plus the volume name). Stop with `docker compose down`.
+
+### Plain Docker / Makefile
+
+```sh
+make build && make up
+```
+
+(See [DOCKER.md](DOCKER.md) for the `docker run`/`make` targets.)
+
+### Configuration
+
+- `config.env` (committed) — ports and all non-secret server options.
+- `.secrets.env` (gitignored) — `DB_PASS`, optional `SYNCPLAY_PASSWORD` / `SYNCPLAY_SALT`.
+- Database backend selected with `HISTORY_DSN`: default `sqlite:////data/history.sqlite`, or `postgres://user:password@host:5432/dbname` for Postgres.
+
+Every Syncplay server option is exposed as an environment variable; [DOCKER.md](DOCKER.md) has the full reference (option table, DSN, inspecting the database, WAL notes).
+
+### Testing without the GUI client
+
+`test_client.py` is a synthetic client that plays a short deterministic session through the proxy:
+
+```sh
+docker cp test_client.py syncplay-history:/tmp/tc.py
+docker exec syncplay-history python3 /tmp/tc.py --username tester --room test-room
+```
+
+You should then see a `tester` user and a `watch_history` row (see [DOCKER.md](DOCKER.md#inspecting-the-history)).
+
 ## License
 
 This project, the Syncplay released binaries, and all the files included in this repository unless stated otherwise in the header of the file, are licensed under the [Apache License, version 2.0](https://www.apache.org/licenses/LICENSE-2.0.html). A copy of this license is included in the LICENSE file of this repository. Licenses and attribution notices for third-party media are set out in [third-party-notices.txt](syncplay/resources/third-party-notices.txt).

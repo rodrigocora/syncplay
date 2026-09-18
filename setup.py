@@ -7,14 +7,14 @@ import setuptools
 from syncplay import projectURL, version as syncplay_version
 
 
-def read(fname):
+def read(fname: str) -> str:
     with open(os.path.join(os.path.dirname(__file__), fname), 'r') as f:
         return f.read()
 
 installRequirements = read('requirements.txt').splitlines() +\
                         read('requirements_gui.txt').splitlines()
 
-setuptools.setup(
+_ = setuptools.setup(
     name="syncplay",
     version=syncplay_version,
     author="Syncplay",

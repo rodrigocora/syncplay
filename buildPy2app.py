@@ -5,19 +5,30 @@ Usage:
     python setup.py py2app
 """
 
-from setuptools import setup
+from collections.abc import Mapping, Sequence
 from glob import glob
+from typing import cast
+
+from setuptools import setup
+
 import syncplay
 
 APP = ['syncplayClient.py']
-DATA_FILES = [
-    ('resources', glob('syncplay/resources/*.png') + glob('syncplay/resources/*.rtf') + glob('syncplay/resources/*.txt') + glob('syncplay/resources/*.lua')),
+DATA_FILES: list[tuple[str, Sequence[str]]] = [
+    ('resources',
+     glob('syncplay/resources/*.png')
+     + glob('syncplay/resources/*.rtf')
+     + glob('syncplay/resources/*.txt')
+     + glob('syncplay/resources/*.lua')),
     ('resources/lua/intf', glob('syncplay/resources/lua/intf/*.lua'))
 ]
 OPTIONS = {
     'iconfile': 'syncplay/resources/icon.icns',
     'extra_scripts': 'syncplayServer.py',
-    'includes': {'PySide2.QtCore', 'PySide2.QtUiTools', 'PySide2.QtGui', 'PySide2.QtWidgets', 'certifi', 'cffi', 'pem', 'charset_normalizer.md__mypyc'},
+    'includes': {
+        'PySide2.QtCore', 'PySide2.QtUiTools', 'PySide2.QtGui', 'PySide2.QtWidgets',
+        'certifi', 'cffi', 'pem', 'charset_normalizer.md__mypyc'
+    },
     'excludes': {'PySide', 'PySide.QtCore', 'PySide.QtUiTools', 'PySide.QtGui', 'tkinter'},
     'qt_plugins': [
         'platforms/libqcocoa.dylib',
@@ -34,10 +45,10 @@ OPTIONS = {
     }
 }
 
-setup(
+_ = setup(
     app=APP,
     name='Syncplay',
     data_files=DATA_FILES,
-    options={'py2app': OPTIONS},
+    options={'py2app': cast(Mapping[str, str], OPTIONS)},
     setup_requires=['py2app'],
 )

@@ -1,0 +1,14 @@
+services:
+  syncplay:
+    build: .
+    image: syncplay-history
+    container_name: syncplay-history
+    ports:
+      - "12346:12346"
+    volumes:
+      - syncplay_history_data:/data
+      - ./config.env:/app/config.env:ro
+      - ./.secrets.env:/app/.secrets.env:ro
+
+volumes:
+  syncplay_history_data:
