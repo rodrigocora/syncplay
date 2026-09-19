@@ -22,7 +22,7 @@ services:
       DB_NAME: "syncplay_history"
       # Syncplay server options (all optional; unset/empty = server default).
       SYNCPLAY_ISOLATE_ROOMS: "false"
-      SYNCPLAY_DISABLE_READY: "false"
+      SYNCPLAY_DISABLE_READY: "true"
       SYNCPLAY_DISABLE_CHAT: "false"
       SYNCPLAY_IPV4_ONLY: "false"
       SYNCPLAY_IPV6_ONLY: "false"
