@@ -4,7 +4,9 @@ services:
     image: syncplay-history
     container_name: syncplay-history
     ports:
-      - "12346:12346"
+      # loopback only: the server is meant to be reached through a same-host
+      # reverse proxy (see DOCKER.md, "Behind a reverse proxy")
+      - "127.0.0.1:12346:12346"
     environment:
       # Internal port the syncplay server listens on (the proxy forwards to it).
       SYNCPLAY_PORT: "12345"
@@ -25,7 +27,7 @@ services:
       SYNCPLAY_IPV4_ONLY: "false"
       SYNCPLAY_IPV6_ONLY: "false"
       # SYNCPLAY_MOTD_FILE: /app/motd.txt
-      SYNCPLAY_ROOMS_DB_FILE: /data/rooms.sqlite
+      # SYNCPLAY_ROOMS_DB_FILE: /data/rooms.sqlite  (SQLite-only; off in the all-Postgres deployment)
       SYNCPLAY_PERMANENT_ROOMS_FILE: /data/permanent_rooms.txt
       # SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH: "150"
       # SYNCPLAY_MAX_USERNAME_LENGTH: "16"

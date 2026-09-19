@@ -40,8 +40,8 @@ docker run -d --name syncplay-history \
 ```
 
 SQLite is the default, so no configuration is needed for the common case.
-Postgres/MariaDB support is ready to add behind the same DSN interface; MariaDB
-and MySQL are deferred for now.
+The supported backends are SQLite and Postgres only; MariaDB and MySQL are out
+of scope.
 
 ## Build and run
 
@@ -66,6 +66,13 @@ docker compose down
 ```
 
 The variable reference lives in the [README](README.md#quick-start-docker-compose).
+
+### Behind a reverse proxy
+
+The proxy speaks raw TCP, not HTTP — the reverse proxy must forward at the
+TCP/stream layer (Caddy `tcp` site block, nginx `stream`, etc.). `compose.yaml`
+binds the port to `127.0.0.1`, so only a same-host proxy can reach the server;
+point it at `127.0.0.1:12346`.
 
 ### Makefile shortcuts
 
@@ -122,7 +129,7 @@ unmodified server code; the rest are mapped by `entrypoint.sh`.
 | `SYNCPLAY_DISABLE_READY` | `--disable-ready` | `false` | Boolean. |
 | `SYNCPLAY_DISABLE_CHAT` | `--disable-chat` | `false` | Boolean. |
 | `SYNCPLAY_MOTD_FILE` | `--motd-file` | — | Path inside the container to the MOTD file. |
-| `SYNCPLAY_ROOMS_DB_FILE` | `--rooms-db-file` | — | Enables room persistence (SQLite file, e.g. `/data/rooms.sqlite`). |
+| `SYNCPLAY_ROOMS_DB_FILE` | `--rooms-db-file` | — | Enables room persistence (SQLite file, e.g. `/data/rooms.sqlite`). SQLite-only; left off in the all-Postgres deployment. |
 | `SYNCPLAY_PERMANENT_ROOMS_FILE` | `--permanent-rooms-file` | — | Requires room persistence. One room name per line. |
 | `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH` | `--max-chat-message-length` | `150` | Integer. |
 | `SYNCPLAY_MAX_USERNAME_LENGTH` | `--max-username-length` | `16` | Integer. |
@@ -135,7 +142,7 @@ unmodified server code; the rest are mapped by `entrypoint.sh`.
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | — | — | `config.env`. Non-secret DB connection parts. Leave `DB_HOST` empty for the SQLite default. |
 | `DB_PASS` | — | — | `.secrets.env`. Watch-history DB password. |
 | `PROXY_PORT` | — | `12346` | `config.env`. The port clients connect to (the proxy). |
-| `HISTORY_DSN` | — | `sqlite:////data/history.sqlite` | Optional full DSN override; takes precedence over the `DB_*` parts. |
+| `HISTORY_DSN` | — | `sqlite:////data/history.sqlite` | Optional full DSN; used only when `DB_HOST` is not set — the `DB_*` parts take precedence over it. |
 
 File-based options (`--motd-file`, `--rooms-db-file`, `--permanent-rooms-file`,
 `--stats-db-file`, `--tls`) take a **path inside the container**. Mount or copy
@@ -181,6 +188,30 @@ c = sqlite3.connect('/data/history.sqlite')
 print(c.execute('select * from users').fetchall())
 for r in c.execute('select room,file,size,watched,percentage,duration,stopped_at from watch_history'):
     print(r)
+"
+```
+
+With a Postgres DSN, query through the same container (it has `psycopg2`; the
+password comes from the mounted `.secrets.env`, which a plain `docker exec`
+does not load automatically):
+
+```sh
+docker exec syncplay-history python3 -c "
+import os, psycopg2
+try:
+    for line in open('/app/.secrets.env'):
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+except FileNotFoundError:
+    pass
+dsn = 'postgres://%s:%s@%s:%s/%s' % (
+    os.environ['DB_USER'], os.environ.get('DB_PASS', ''),
+    os.environ['DB_HOST'], os.environ.get('DB_PORT', '5432'), os.environ['DB_NAME'])
+cur = psycopg2.connect(dsn).cursor()
+print('users:', cur.execute('select * from users').fetchall())
+print('history:', cur.execute('select room, file, size, watched, percentage, duration, stopped_at from watch_history').fetchall())
 "
 ```
 
@@ -269,8 +300,8 @@ sudo systemctl restart docker
 
 ## Notes
 
-- The schema is intentionally simple so the data can be migrated between
-  backends (SQLite / Postgres, and MariaDB/MySQL later).
+- The schema is intentionally simple so the data can be migrated between the
+  two supported backends (SQLite / Postgres).
 - No housekeeping/cleanup is performed.
 - On SELinux systems (Fedora) the `config.env`/`.secrets.env` mounts carry the
   `,z` label flag; without it the container cannot read the files and the
