@@ -16,3 +16,5 @@ Store the history of watched files(not need to check metada, filename is ok), or
 - [x] Organize the files and clean what is not need anymore.
 - [x] Expose all syncplay server options via environment variables.
 - [x] Split config into config.env (committed, non-secret) and .secrets.env (gitignored, passwords only); password never on the command line.
+- [x] Persistent rooms: enable `SYNCPLAY_ROOMS_DB_FILE` + `SYNCPLAY_PERMANENT_ROOMS_FILE`, `data/` bind mount, `data/permanent_rooms.txt` (SextaDosAnimes); document in README.md. (added by AI, 2026-09-19)
+- [x] Document the BuildKit DNS build failure (IPv6-only host resolver) and the `daemon.json` fix in DOCKER.md. (added by AI, 2026-09-19)

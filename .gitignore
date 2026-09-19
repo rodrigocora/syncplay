@@ -11,6 +11,8 @@ venv
 /syncplay_v*
 syncplay_setup.nsi
 dist.7z
+/data/*.sqlite
+/data/*.sqlite-*
 .*
 !.appveyor.yml
 !.github

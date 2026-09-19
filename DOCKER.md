@@ -249,6 +249,24 @@ reopen the folder) so it re-resolves the interpreter to `.venv/bin/python`.
 
 (`pyrightconfig.json` is also present for anyone running standalone pyright.)
 
+## Troubleshooting
+
+### Build fails: `Failed to resolve 'pypi.org'` during `pip install`
+
+Build steps run in a BuildKit sandbox before any container starts. If the host's `/etc/resolv.conf` lists only IPv6 nameservers (common on cloud VPSes), the sandbox cannot reach them and `pip` fails DNS resolution — even though `ping` from the host works. Regular containers are often unaffected: Docker substitutes a default resolver for them, but BuildKit does not.
+
+Fix: give the daemon an explicit IPv4 resolver in `/etc/docker/daemon.json`, then restart Docker:
+
+```json
+{
+  "dns": ["9.9.9.9", "149.112.112.112"]
+}
+```
+
+```sh
+sudo systemctl restart docker
+```
+
 ## Notes
 
 - The schema is intentionally simple so the data can be migrated between

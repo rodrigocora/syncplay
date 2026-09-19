@@ -25,8 +25,8 @@ services:
       SYNCPLAY_IPV4_ONLY: "false"
       SYNCPLAY_IPV6_ONLY: "false"
       # SYNCPLAY_MOTD_FILE: /app/motd.txt
-      # SYNCPLAY_ROOMS_DB_FILE: /data/rooms.sqlite
-      # SYNCPLAY_PERMANENT_ROOMS_FILE: /data/permanent_rooms.txt
+      SYNCPLAY_ROOMS_DB_FILE: /data/rooms.sqlite
+      SYNCPLAY_PERMANENT_ROOMS_FILE: /data/permanent_rooms.txt
       # SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH: "150"
       # SYNCPLAY_MAX_USERNAME_LENGTH: "16"
       # SYNCPLAY_STATS_DB_FILE: /data/stats.sqlite
@@ -34,9 +34,6 @@ services:
       # SYNCPLAY_INTERFACE_IPV4: 0.0.0.0
       # SYNCPLAY_INTERFACE_IPV6: ::
     volumes:
-      - syncplay_history_data:/data
+      - ./data:/data
       # ,z: SELinux label so the container can read the host file (Fedora)
       - ./.secrets.env:/app/.secrets.env:ro,z
-
-volumes:
-  syncplay_history_data:

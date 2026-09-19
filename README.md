@@ -58,7 +58,7 @@ cp secrets.env.example .secrets.env   # put DB_PASS here when using a server dat
 docker compose up -d --build
 ```
 
-Clients connect to port **12346** (the proxy). Data is persisted in the named volume `syncplay_syncplay_history_data` (compose project prefix plus volume name). Stop with `docker compose down`.
+Clients connect to port **12346** (the proxy). Data is persisted in the local `data/` directory (bind-mounted to `/data` in the container). Stop with `docker compose down`.
 
 All settings live in the `environment:` block of `compose.yaml` — write or update the values you need there; no config file is mounted in the compose flow (`config.env` is only used by the `make`/`docker run` flow).
 
@@ -76,7 +76,32 @@ All settings live in the `environment:` block of `compose.yaml` — write or upd
 | `SYNCPLAY_DISABLE_CHAT` | `false` | Disable chat |
 | `SYNCPLAY_IPV4_ONLY` / `SYNCPLAY_IPV6_ONLY` | `false` | Bind to a single IP family |
 
-Optional file/TLS/interface options (`SYNCPLAY_MOTD_FILE`, `SYNCPLAY_ROOMS_DB_FILE`, `SYNCPLAY_PERMANENT_ROOMS_FILE`, `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH`, `SYNCPLAY_MAX_USERNAME_LENGTH`, `SYNCPLAY_STATS_DB_FILE`, `SYNCPLAY_TLS_PATH`, `SYNCPLAY_INTERFACE_IPV4/6`) are available as commented lines in `compose.yaml`.
+Optional file/TLS/interface options (`SYNCPLAY_MOTD_FILE`, `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH`, `SYNCPLAY_MAX_USERNAME_LENGTH`, `SYNCPLAY_STATS_DB_FILE`, `SYNCPLAY_TLS_PATH`, `SYNCPLAY_INTERFACE_IPV4/6`) are available as commented lines in `compose.yaml`.
+
+### Managing persistent rooms
+
+Persistent rooms are listed in `data/permanent_rooms.txt`, one room name per line. At startup the server creates any listed room that does not exist yet and marks it permanent, so users cannot delete it. The room database (`data/rooms.sqlite`) stores the room state between restarts.
+
+Both required variables are already set in `compose.yaml`:
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `SYNCPLAY_ROOMS_DB_FILE` | `/data/rooms.sqlite` | Room persistence (required by the permanent-rooms feature) |
+| `SYNCPLAY_PERMANENT_ROOMS_FILE` | `/data/permanent_rooms.txt` | Room list, read at startup |
+
+To add or remove a room, edit `data/permanent_rooms.txt` on the host (it is the bind-mounted `/data`), then restart:
+
+```sh
+docker compose restart syncplay
+```
+
+Notes:
+
+- The file is read only at startup — edits take effect after a restart.
+- A missing file is silently ignored (no permanent rooms, no error).
+- Each line must be exactly a room name, with no extra spaces or characters.
+- `SYNCPLAY_ISOLATE_ROOMS` must stay `false`; isolate mode bypasses the room manager entirely.
+- On SELinux-enforcing systems, add the `,z` flag to the `./data:/data` mount.
 
 The backend can also be forced with `HISTORY_DSN` (e.g. `postgres://user:password@host:5432/dbname`), which takes precedence over the `DB_*` parts.
 
