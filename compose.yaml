@@ -39,3 +39,11 @@ services:
       - ./data:/data
       # ,z: SELinux label so the container can read the host file (Fedora)
       - ./.secrets.env:/app/.secrets.env:ro,z
+    networks:
+      - default
+      - proxy-tier
+
+networks:
+  default:
+  proxy-tier:
+    external: true

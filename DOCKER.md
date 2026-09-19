@@ -74,6 +74,11 @@ TCP/stream layer (Caddy `tcp` site block, nginx `stream`, etc.). `compose.yaml`
 binds the port to `127.0.0.1`, so only a same-host proxy can reach the server;
 point it at `127.0.0.1:12346`.
 
+The service also attaches to the external `proxy-tier` network (create it on
+the host first, e.g. `docker network create proxy-tier`). A containerized
+reverse proxy on that network targets `syncplay-history:12346` instead of the
+loopback port.
+
 ### Makefile shortcuts
 
 The `GNUmakefile` has Docker targets (run from the repo root):
