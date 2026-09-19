@@ -118,9 +118,10 @@ CONFIG_FILE  ?= config.env
 # and .secrets.env (if present).
 up:
 	docker rm -f $(CONTAINER) || true
+	# ,z on file mounts: SELinux label so the container can read them (Fedora)
 	docker run -d --name $(CONTAINER) -p $(DOCKER_PORT):$(DOCKER_PORT) \
-		-v $(abspath $(CONFIG_FILE)):/app/config.env:ro \
-		$(if $(wildcard $(SECRETS_FILE)),-v $(abspath $(SECRETS_FILE)):/app/.secrets.env:ro,) \
+		-v $(abspath $(CONFIG_FILE)):/app/config.env:ro,z \
+		$(if $(wildcard $(SECRETS_FILE)),-v $(abspath $(SECRETS_FILE)):/app/.secrets.env:ro,z,) \
 		$(IMAGE)
 	docker logs $(CONTAINER)
 

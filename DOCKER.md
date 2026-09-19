@@ -54,6 +54,19 @@ Run it as described in the [Database (DSN)](#database-dsn) section above.
 - Clients connect to the **proxy** on port **12346**.
 - The Syncplay server listens internally on **12345**.
 
+### Docker Compose
+
+`compose.yaml` runs the same image with all settings in its `environment:`
+block (no `config.env` mount). Write the values you need there, then:
+
+```sh
+cp secrets.env.example .secrets.env   # when using a server database
+docker compose up -d --build
+docker compose down
+```
+
+The variable reference lives in the [README](README.md#quick-start-docker-compose).
+
 ### Makefile shortcuts
 
 The `GNUmakefile` has Docker targets (run from the repo root):
@@ -241,3 +254,6 @@ reopen the folder) so it re-resolves the interpreter to `.venv/bin/python`.
 - The schema is intentionally simple so the data can be migrated between
   backends (SQLite / Postgres, and MariaDB/MySQL later).
 - No housekeeping/cleanup is performed.
+- On SELinux systems (Fedora) the `config.env`/`.secrets.env` mounts carry the
+  `,z` label flag; without it the container cannot read the files and the
+  proxy silently falls back to SQLite.

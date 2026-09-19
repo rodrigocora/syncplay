@@ -54,11 +54,31 @@ It records:
 ### Quick start (Docker Compose)
 
 ```sh
-cp secrets.env.example .secrets.env   # only needed when using a server database
+cp secrets.env.example .secrets.env   # put DB_PASS here when using a server database
 docker compose up -d --build
 ```
 
-Clients connect to port **12346** (the proxy). The database defaults to SQLite inside the container, persisted in the named volume (`syncplay_syncplay_history_data` — the compose project prefix plus the volume name). Stop with `docker compose down`.
+Clients connect to port **12346** (the proxy). Data is persisted in the named volume `syncplay_syncplay_history_data` (compose project prefix plus volume name). Stop with `docker compose down`.
+
+All settings live in the `environment:` block of `compose.yaml` — write or update the values you need there; no config file is mounted in the compose flow (`config.env` is only used by the `make`/`docker run` flow).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SYNCPLAY_PORT` | `12345` | Internal server port; the proxy forwards to it (not published) |
+| `PROXY_PORT` | `12346` | Port clients connect to. If changed, update the `ports:` mapping too |
+| `DB_HOST` | empty | Watch-history DB host (Postgres). Empty = built-in SQLite `sqlite:////data/history.sqlite` |
+| `DB_PORT` | `5432` | Watch-history DB port |
+| `DB_USER` | — | Watch-history DB user |
+| `DB_NAME` | `history` | Watch-history DB name |
+| `DB_PASS` | — | **Not in compose** — put it in `.secrets.env` (mounted, gitignored) |
+| `SYNCPLAY_ISOLATE_ROOMS` | `false` | Isolate rooms from each other |
+| `SYNCPLAY_DISABLE_READY` | `false` | Disable the "ready" (3-2-1) state |
+| `SYNCPLAY_DISABLE_CHAT` | `false` | Disable chat |
+| `SYNCPLAY_IPV4_ONLY` / `SYNCPLAY_IPV6_ONLY` | `false` | Bind to a single IP family |
+
+Optional file/TLS/interface options (`SYNCPLAY_MOTD_FILE`, `SYNCPLAY_ROOMS_DB_FILE`, `SYNCPLAY_PERMANENT_ROOMS_FILE`, `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH`, `SYNCPLAY_MAX_USERNAME_LENGTH`, `SYNCPLAY_STATS_DB_FILE`, `SYNCPLAY_TLS_PATH`, `SYNCPLAY_INTERFACE_IPV4/6`) are available as commented lines in `compose.yaml`.
+
+The backend can also be forced with `HISTORY_DSN` (e.g. `postgres://user:password@host:5432/dbname`), which takes precedence over the `DB_*` parts.
 
 ### Plain Docker / Makefile
 
@@ -66,15 +86,7 @@ Clients connect to port **12346** (the proxy). The database defaults to SQLite i
 make build && make up
 ```
 
-(See [DOCKER.md](DOCKER.md) for the `docker run`/`make` targets.)
-
-### Configuration
-
-- `config.env` (committed) — ports and all non-secret server options.
-- `.secrets.env` (gitignored) — `DB_PASS`, optional `SYNCPLAY_PASSWORD` / `SYNCPLAY_SALT`.
-- Database backend selected with `HISTORY_DSN`: default `sqlite:////data/history.sqlite`, or `postgres://user:password@host:5432/dbname` for Postgres.
-
-Every Syncplay server option is exposed as an environment variable; [DOCKER.md](DOCKER.md) has the full reference (option table, DSN, inspecting the database, WAL notes).
+The make/`docker run` flow reads `config.env` (committed, non-secret) + `.secrets.env` (gitignored) instead of compose environment variables. See [DOCKER.md](DOCKER.md) for the targets, the full server-option table, DSN details, and inspecting the database.
 
 ### Testing without the GUI client
 
