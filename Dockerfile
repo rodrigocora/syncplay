@@ -24,4 +24,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 12346
 
+# Probe the proxy port (the client-facing port). Hardcodes the default
+# PROXY_PORT; if you change PROXY_PORT, update this too.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD python3 -c "import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('127.0.0.1',12346))==0 else 1)"
+
 ENTRYPOINT ["python3", "/app/entrypoint.sh"]

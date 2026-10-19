@@ -240,6 +240,22 @@ def create_store(dsn):
     raise ValueError("unsupported DSN: " + dsn)
 
 
+def create_store_with_retry(dsn, attempts=5, delay=2.0):
+    # The DB may come up after the proxy does; retry briefly before giving up
+    # with a clear, actionable error instead of a bare traceback.
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return create_store(dsn)
+        except Exception as e:
+            last_error = e
+            if attempt < attempts:
+                print(f"history store not ready ({_redactDsn(dsn)}): {e}; retry {attempt}/{attempts} in {delay}s")
+                time.sleep(delay)
+    print(f"history store unavailable at {_redactDsn(dsn)} after {attempts} attempts: {last_error}")
+    raise SystemExit(1)
+
+
 class RecordingState:
     def __init__(self, store):
         self._store = store
@@ -387,7 +403,7 @@ def _checkpointLoop(store):
 
 
 def run(proxyPort, host, port, dsn):
-    store = create_store(dsn)
+    store = create_store_with_retry(dsn)
     factory = ClientFactory(host, port, store)
     TCP4ServerEndpoint(reactor, proxyPort, interface="0.0.0.0").listen(factory)
     from twisted.internet import threads

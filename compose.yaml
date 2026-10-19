@@ -3,6 +3,7 @@ services:
     build: .
     image: syncplay-history
     container_name: syncplay-history
+    restart: unless-stopped
     ports:
       # loopback only: the server is meant to be reached through a same-host
       # reverse proxy (see DOCKER.md, "Behind a reverse proxy")

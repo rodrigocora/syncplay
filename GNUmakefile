@@ -100,9 +100,14 @@ install-server: common server warnings
 uninstall: u-server u-common
 
 # --- Docker (watch-history proxy) -----------------------------------------
+# Container engine: this host ships podman, so `make DOCKER=podman ...` works.
+DOCKER      ?= docker
 CONTAINER   ?= syncplay-history
 IMAGE       ?= syncplay-history
 DOCKER_PORT ?= 12346
+# Publish the proxy port on loopback by default (matches compose); the server
+# is meant to be reached through a same-host reverse proxy.
+BIND_ADDR   ?= 127.0.0.1
 
 # Configuration is split into two files, both bind-mounted into the container
 # and loaded by entrypoint.sh:
@@ -114,21 +119,33 @@ DOCKER_PORT ?= 12346
 SECRETS_FILE ?= .secrets.env
 CONFIG_FILE  ?= config.env
 
+# Create the external network compose.yaml expects (idempotent).
+net:
+	$(DOCKER) network create proxy-tier || true
+
 # Remove (if present) and start the container, printing logs. Mounts config.env
 # and .secrets.env (if present).
 up:
-	docker rm -f $(CONTAINER) || true
+	$(DOCKER) rm -f $(CONTAINER) || true
 	# ,z on file mounts: SELinux label so the container can read them (Fedora)
-	docker run -d --name $(CONTAINER) -p $(DOCKER_PORT):$(DOCKER_PORT) \
+	$(DOCKER) run -d --name $(CONTAINER) -p $(BIND_ADDR):$(DOCKER_PORT):$(DOCKER_PORT) \
 		-v $(abspath $(CONFIG_FILE)):/app/config.env:ro,z \
 		$(if $(wildcard $(SECRETS_FILE)),-v $(abspath $(SECRETS_FILE)):/app/.secrets.env:ro,z,) \
 		$(IMAGE)
-	docker logs $(CONTAINER)
+	$(DOCKER) logs $(CONTAINER)
+
+# Podman defaults to OCI image format, which drops the Dockerfile HEALTHCHECK;
+# force the docker format so it survives. Real docker already honours it.
+ifeq ($(DOCKER),podman)
+BUILD_FORMAT := --format docker
+else
+BUILD_FORMAT :=
+endif
 
 # Build the image (--no-cache: BuildKit on this host has reused stale COPY
 # layers and shipped the old history.py despite local edits)
 build:
-	docker build --no-cache -t $(IMAGE) .
+	$(DOCKER) build $(BUILD_FORMAT) --no-cache -t $(IMAGE) .
 
 # Remove and start the container again (no rebuild)
 rerun: up
@@ -140,11 +157,11 @@ rebuild: build up
 # client sends a State ping every ~1s, which would otherwise push the early
 # Hello/Set lines off a small window)
 logs:
-	docker logs --tail 500 $(CONTAINER)
+	$(DOCKER) logs --tail 500 $(CONTAINER)
 
 # Stop and remove the container
 down:
-	docker rm -f $(CONTAINER) || true
+	$(DOCKER) rm -f $(CONTAINER) || true
 
 install: common client server warnings
 
