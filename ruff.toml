@@ -17,6 +17,7 @@ extend-include = ["syncplay/history.py"]
 
 include = [
     "test_client.py",
+    "simulate_clients.py",
     "syncplay/history.py",
 ]
 

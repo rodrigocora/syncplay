@@ -22,7 +22,7 @@
 -->
 
 # Syncplay
-![GitHub Actions build status](https://github.com/Syncplay/syncplay/workflows/Build/badge.svg)
+![GitHub Actions build status](https://github.com/rodrigocora/syncplay/workflows/Build/badge.svg)
 
 Solution to synchronize video playback across multiple instances of mpv, VLC, MPC-HC, MPC-BE and mplayer2 over the Internet.
 
@@ -123,6 +123,15 @@ docker exec syncplay-history python3 /tmp/tc.py --username tester --room test-ro
 ```
 
 You should then see a `tester` user and a `watch_history` row (see [DOCKER.md](DOCKER.md#inspecting-the-history)).
+
+`simulate_clients.py` is a multi-scenario end-to-end matrix that spawns threaded clients against the live proxy and asserts the recorded results — concurrency/max, seeks, percentage caps, protocol noise, reconnect, and stop-then-rewatch (scenarios S1–S10). It resolves the backend exactly like the proxy does, so it always checks the store actually in use, and cleans up its own `sp-sim-*` rows when done:
+
+```sh
+docker cp simulate_clients.py syncplay-history:/tmp/sim.py
+docker exec syncplay-history python3 /tmp/sim.py
+```
+
+It prints a PASS/FAIL table per scenario; run it against both the SQLite default and a Postgres `HISTORY_DSN` to cover both backends.
 
 ## License
 
