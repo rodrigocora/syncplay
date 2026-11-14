@@ -67,13 +67,16 @@ upstream_port = env("SYNCPLAY_PORT", "12345")
 proxy_port = env("PROXY_PORT", "12346")
 
 # The database connection (DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME) is read
-# by the proxy directly from the environment. The password therefore never
-# appears on any command line.
+# by the proxy and the server directly from the environment. The password
+# therefore never appears on any command line.
 server = ["python3", "/app/syncplayServer.py", "--port", upstream_port]
 
 # The original server reads --password and --salt from SYNCPLAY_PASSWORD /
 # SYNCPLAY_SALT itself, so we do not re-pass them here. Every other option
 # defaults to the server's own default when its env var is unset.
+# Rooms + watch history share one backend DB; the server is always given the
+# DSN (resolved inside the process from DB_* vars / SYNCPLAY_DSN / HISTORY_DSN).
+server += ["--backend-dsn", "auto"]
 if env("SYNCPLAY_MOTD_FILE"):
     server += ["--motd-file", env("SYNCPLAY_MOTD_FILE")]
 if env("SYNCPLAY_ROOMS_DB_FILE"):
@@ -120,6 +123,11 @@ proxy_cmd = [
 ]
 proxy_proc = subprocess.Popen(proxy_cmd)
 
+# Admin web app (loopback-only; expose through the reverse proxy).
+admin_port = env("ADMIN_PORT", "12347")
+admin_cmd = ["python3", "/app/syncplay/admin.py", "--port", admin_port]
+admin_proc = subprocess.Popen(admin_cmd)
+
 
 def _request_stop(signum, _frame):
     # A clean container stop (SIGTERM/SIGINT) exits 0 so orchestrators do not
@@ -130,11 +138,14 @@ def _request_stop(signum, _frame):
 signal.signal(signal.SIGTERM, _request_stop)
 signal.signal(signal.SIGINT, _request_stop)
 
-# Supervise both children. The proxy is the less critical one: restart it a
-# bounded number of times on unexpected death. The server is the source of
-# truth: if it exits, tear everything down (exit 0 only for a clean stop).
+# Supervise the children. The proxy and the admin app are the less critical
+# ones: restart each a bounded number of times on unexpected death. The server
+# is the source of truth: if it exits, tear everything down (exit 0 only for a
+# clean stop).
 PROXY_MAX_RESTARTS = 5
+ADMIN_MAX_RESTARTS = 5
 proxy_restarts = 0
+admin_restarts = 0
 exit_code = 0
 try:
     while True:
@@ -154,9 +165,20 @@ try:
             print(f"proxy exited rc={proxy_rc}; restarting ({proxy_restarts}/{PROXY_MAX_RESTARTS}) in {delay}s")
             time.sleep(delay)
             proxy_proc = subprocess.Popen(proxy_cmd)
+        admin_rc = admin_proc.poll()
+        if admin_rc is not None:
+            if admin_restarts >= ADMIN_MAX_RESTARTS:
+                exit_code = 1
+                print(f"admin exited rc={admin_rc}; too many restarts; shutting down")
+                break
+            admin_restarts += 1
+            delay = min(2 * admin_restarts, 10)
+            print(f"admin exited rc={admin_rc}; restarting ({admin_restarts}/{ADMIN_MAX_RESTARTS}) in {delay}s")
+            time.sleep(delay)
+            admin_proc = subprocess.Popen(admin_cmd)
         time.sleep(0.5)
 except SystemExit:
     pass
 finally:
-    terminate_all([server_proc, proxy_proc])
+    terminate_all([server_proc, proxy_proc, admin_proc])
     sys.exit(exit_code)

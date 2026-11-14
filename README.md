@@ -44,12 +44,14 @@ Syncplay is not a file sharing service.
 
 ## Watch history (this fork)
 
-This fork adds a **watch-history** feature: a single Docker container runs the unmodified Syncplay server behind a tiny transparent TCP proxy. The proxy forwards all client traffic unchanged while recording what is being watched into a database. No client-side changes are required — existing clients just point at the proxy port.
+This fork adds a **watch-history** feature: a single Docker container runs the (slightly modified) Syncplay server behind a tiny transparent TCP proxy. The proxy forwards all client traffic unchanged while recording what is being watched into a database. No client-side changes are required — existing clients just point at the proxy port.
 
 It records:
 
 - `users` — every username that has ever connected.
 - `watch_history` — one row per (room, file): file name, size, duration, furthest position reached (`watched`, seconds), `percentage`, and timestamps.
+- `persistent_rooms` / `permanent_rooms` — room state and undeletable room names, in the same backend DB.
+- `server_info` / `room_status` — server heartbeat and live room snapshots for the admin app.
 
 ### Quick start (Docker Compose)
 
@@ -58,7 +60,7 @@ cp secrets.env.example .secrets.env   # put DB_PASS here when using a server dat
 docker compose up -d --build
 ```
 
-Clients connect to port **12346** (the proxy). The port is bound to `127.0.0.1`, so the server is only reachable through a same-host reverse proxy (see [DOCKER.md](DOCKER.md#behind-a-reverse-proxy)). Data is persisted in the local `data/` directory (bind-mounted to `/data` in the container). Stop with `docker compose down`.
+Clients connect to port **12346** (the proxy). The port is bound to `127.0.0.1`, so the server is only reachable through a same-host reverse proxy (see [DOCKER.md](DOCKER.md#behind-a-reverse-proxy)). Data is persisted in the local `data/` directory (bind-mounted to `/data` in the container). The **admin web app** runs on port **12347** (loopback) — point your reverse proxy at it and open `/` (see [DOCKER.md](DOCKER.md#admin-web-app)). Stop with `docker compose down`.
 
 All settings live in the `environment:` block of `compose.yaml` — write or update the values you need there; no config file is mounted in the compose flow (`config.env` is only used by the `make`/`docker run` flow).
 
@@ -66,44 +68,37 @@ All settings live in the `environment:` block of `compose.yaml` — write or upd
 |---|---|---|
 | `SYNCPLAY_PORT` | `12345` | Internal server port; the proxy forwards to it (not published) |
 | `PROXY_PORT` | `12346` | Port clients connect to. If changed, update the `ports:` mapping too |
-| `DB_HOST` | empty | Watch-history DB host (Postgres). Empty = built-in SQLite `sqlite:////data/history.sqlite` |
-| `DB_PORT` | `5432` | Watch-history DB port |
-| `DB_USER` | — | Watch-history DB user |
-| `DB_NAME` | `history` | Watch-history DB name |
+| `ADMIN_PORT` | `12347` | Admin web app port (loopback only) |
+| `ADMIN_TOKEN` | unset (open) | Optional bearer token for the admin API (put in `.secrets.env`) |
+| `DB_HOST` | empty | Backend DB host (Postgres). Empty = built-in SQLite `sqlite:////data/syncplay.sqlite` |
+| `DB_PORT` | `5432` | Backend DB port |
+| `DB_USER` | — | Backend DB user |
+| `DB_NAME` | `history` | Backend DB name |
 | `DB_PASS` | — | **Not in compose** — put it in `.secrets.env` (mounted, gitignored) |
 | `SYNCPLAY_ISOLATE_ROOMS` | `false` | Isolate rooms from each other |
 | `SYNCPLAY_DISABLE_READY` | `false` | Disable the "ready" (3-2-1) state |
 | `SYNCPLAY_DISABLE_CHAT` | `false` | Disable chat |
 | `SYNCPLAY_IPV4_ONLY` / `SYNCPLAY_IPV6_ONLY` | `false` | Bind to a single IP family |
 
-Optional file/TLS/interface options (`SYNCPLAY_MOTD_FILE`, `SYNCPLAY_ROOMS_DB_FILE`, `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH`, `SYNCPLAY_MAX_USERNAME_LENGTH`, `SYNCPLAY_STATS_DB_FILE`, `SYNCPLAY_TLS_PATH`, `SYNCPLAY_INTERFACE_IPV4/6`) are available as commented lines in `compose.yaml`.
+Optional file/TLS/interface options (`SYNCPLAY_MOTD_FILE`, `SYNCPLAY_PERMANENT_ROOMS_FILE` (one-time seed), `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH`, `SYNCPLAY_MAX_USERNAME_LENGTH`, `SYNCPLAY_STATS_DB_FILE`, `SYNCPLAY_TLS_PATH`, `SYNCPLAY_INTERFACE_IPV4/6`) are available as commented lines in `compose.yaml`.
 
 ### Managing persistent rooms
 
-Persistent rooms are listed in `data/permanent_rooms.txt`, one room name per line. At startup the server creates any listed room that does not exist yet and marks it permanent, so users cannot delete it.
-
-The variable is already set in `compose.yaml`:
+Permanent rooms live in the backend DB. Create them through the admin page (port 12347) or seed once from the legacy `data/permanent_rooms.txt` via `SYNCPLAY_PERMANENT_ROOMS_FILE` (read only when the `permanent_rooms` table is empty):
 
 | Variable | Value | Purpose |
 |---|---|---|
-| `SYNCPLAY_PERMANENT_ROOMS_FILE` | `/data/permanent_rooms.txt` | Room list, read at startup |
-
-To add or remove a room, edit `data/permanent_rooms.txt` on the host (it is the bind-mounted `/data`), then restart:
-
-```sh
-docker compose restart syncplay
-```
+| `SYNCPLAY_PERMANENT_ROOMS_FILE` | `/data/permanent_rooms.txt` | One-time seed of permanent rooms (DB is the source of truth) |
 
 Notes:
 
-- The file is read only at startup — edits take effect after a restart.
-- A missing file is silently ignored (no permanent rooms, no error).
-- Each line must be exactly a room name, with no extra spaces or characters.
+- Permanent rooms are **undeletable** (the admin API returns 409, and the server ignores client delete attempts).
+- Room/playlist changes made in the admin page apply on the next server restart (`docker compose restart syncplay`).
 - `SYNCPLAY_ISOLATE_ROOMS` must stay `false`; isolate mode bypasses the room manager entirely.
 - On SELinux-enforcing systems, add the `,z` flag to the `./data:/data` mount.
-- The optional room database (`SYNCPLAY_ROOMS_DB_FILE`) is SQLite-only in the upstream server and is left off so the deployment uses a single backend (Postgres). The permanent room list is always kept; room state such as a saved playlist is not kept across restarts.
+- The legacy `SYNCPLAY_ROOMS_DB_FILE` (SQLite rooms db) is replaced by the shared backend — rooms now live in the same DB as the watch history.
 
-Backend selection order: the `DB_*` parts (when `DB_HOST` is set), then `HISTORY_DSN` (e.g. `postgres://user:password@host:5432/dbname`), then the built-in SQLite default.
+Backend selection order: the `DB_*` parts (when `DB_HOST` is set), then `SYNCPLAY_DSN`, then `HISTORY_DSN` (legacy), then the built-in SQLite default.
 
 ### Plain Docker / Makefile
 
@@ -132,6 +127,8 @@ docker exec syncplay-history python3 /tmp/sim.py
 ```
 
 It prints a PASS/FAIL table per scenario; run it against both the SQLite default and a Postgres `HISTORY_DSN` to cover both backends.
+
+`tests/` holds the host-side unit suite (backend store + admin API, in-memory SQLite): `make test` (or `python -m pytest tests/`). A Postgres round-trip test is env-gated on `SYNCPLAY_TEST_PG_DSN`. The container-side room-persistence and admin smoke checks are `test_rooms_persistence.py` and `test_admin_smoke.py`, run with `make test-e2e` inside the container.
 
 ## License
 

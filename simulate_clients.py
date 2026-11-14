@@ -17,7 +17,6 @@ import argparse
 import json
 import os
 import socket
-import sqlite3
 import threading
 import time
 
@@ -42,7 +41,11 @@ def load_env_file(path):
 
 
 def resolve_backend():
-    # Same precedence as history.py main(): DB_* vars, then HISTORY_DSN, then default.
+    # Mirror db.resolve_dsn precedence (DB_* vars, SYNCPLAY_DSN, HISTORY_DSN,
+    # SQLite default) without importing the package, since this script runs
+    # standalone from /tmp inside the container.
+    import re
+
     host = os.environ.get("DB_HOST")
     if host:
         return "postgres", dict(
@@ -52,9 +55,28 @@ def resolve_backend():
             password=os.environ.get("DB_PASS"),
             dbname=os.environ.get("DB_NAME") or "history",
         )
-    dsn = os.environ.get("HISTORY_DSN") or "sqlite:////data/history.sqlite"
-    path = dsn.split("://", 1)[1] if "://" in dsn else dsn
-    return "sqlite", path
+    dsn = (
+        os.environ.get("SYNCPLAY_DSN")
+        or os.environ.get("HISTORY_DSN")
+        or "sqlite:////data/syncplay.sqlite"
+    )
+    scheme = dsn.split(":", 1)[0].lower()
+    if scheme == "sqlite":
+        return "sqlite", dsn[len("sqlite:"):] or ":memory:"
+    m = re.match(
+        r"^postgres(?:ql)?://(?:([^:@/]*)(?::([^@/]*))?@)?([a-zA-Z0-9.\-_]+)(?::(\d+))?(/[^?#]+)?",
+        dsn,
+    )
+    if not m:
+        raise ValueError("invalid DSN: " + dsn)
+    user, password, host, port, path = m.groups()
+    return "postgres", {
+        "host": host,
+        "port": int(port or 5432),
+        "user": user,
+        "password": password,
+        "dbname": (path or "/history").lstrip("/"),
+    }
 
 
 class Store:
@@ -65,7 +87,9 @@ class Store:
 
             self._conn = psycopg2.connect(**params)
         else:
-            self._conn = sqlite3.connect(params, timeout=15)
+            import sqlite3 as _sqlite3
+
+            self._conn = _sqlite3.connect(params, timeout=15)
 
     def query(self, sql, params=()):
         cur = self._conn.cursor()

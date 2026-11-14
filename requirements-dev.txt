@@ -1,0 +1,4 @@
+# Host-side dev/test dependencies. NOT installed in the Docker image
+# (requirements.txt is the runtime list).
+pytest>=8
+httpx>=0.27

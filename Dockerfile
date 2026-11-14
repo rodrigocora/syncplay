@@ -20,9 +20,9 @@ VOLUME ["/data"]
 # Non-secret defaults live in config.env (mounted in). Secrets live in
 # .secrets.env (mounted in). Keep the image ENV minimal; no secrets here.
 ENV PYTHONUNBUFFERED=1 \
-    HISTORY_DSN=sqlite:////data/history.sqlite
+    SYNCPLAY_DSN=sqlite:////data/syncplay.sqlite
 
-EXPOSE 12346
+EXPOSE 12346 12347
 
 # Probe the proxy port (the client-facing port). Hardcodes the default
 # PROXY_PORT; if you change PROXY_PORT, update this too.

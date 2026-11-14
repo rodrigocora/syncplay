@@ -17,7 +17,7 @@ except:
     pass
 
 import syncplay
-from syncplay import constants
+from syncplay import constants, db
 from syncplay.messages import getMessage
 from syncplay.protocols import SyncServerProtocol
 from syncplay.utils import RoomPasswordProvider, NotControlledRoom, RandomStringGenerator, meetsMinVersion, playlistIsValid, truncateText, getListAsMultilineString, convertMultilineStringToList
@@ -25,7 +25,7 @@ from syncplay.utils import RoomPasswordProvider, NotControlledRoom, RandomString
 class SyncFactory(Factory):
     def __init__(self, port='', password='', motdFilePath=None, roomsDbFile=None, permanentRoomsFile=None, isolateRooms=False, salt=None,
                  disableReady=False, disableChat=False, maxChatMessageLength=constants.MAX_CHAT_MESSAGE_LENGTH,
-                 maxUsernameLength=constants.MAX_USERNAME_LENGTH, statsDbFile=None, tlsCertPath=None):
+                 maxUsernameLength=constants.MAX_USERNAME_LENGTH, statsDbFile=None, tlsCertPath=None, backendDsn=None):
         self.isolateRooms = isolateRooms
         syncplay.messages.setLanguage(syncplay.messages.getInitialLanguage())
         print(getMessage("welcome-server-notification").format(syncplay.version))
@@ -45,11 +45,30 @@ class SyncFactory(Factory):
         self.maxChatMessageLength = maxChatMessageLength if maxChatMessageLength is not None else constants.MAX_CHAT_MESSAGE_LENGTH
         self.maxUsernameLength = maxUsernameLength if maxUsernameLength is not None else constants.MAX_USERNAME_LENGTH
         self.permanentRoomsFile = permanentRoomsFile if permanentRoomsFile is not None and os.path.isfile(permanentRoomsFile) else None
-        self.permanentRooms = self.loadListFromMultilineTextFile(self.permanentRoomsFile) if self.permanentRoomsFile is not None else []
-        if not isolateRooms:
-            self._roomManager = RoomManager(self.roomsDbFile, self.permanentRooms)
+        # Backend store: rooms (and, with the admin app, room config) live in
+        # the same database as the watch history. --backend-dsn wins; the
+        # legacy --rooms-db-file is honoured by opening that SQLite file.
+        # When neither is given the server behaves exactly like upstream
+        # (no room persistence). The container always passes --backend-dsn.
+        if not isolateRooms and (backendDsn or roomsDbFile):
+            dsn = backendDsn or ("sqlite:" + roomsDbFile if roomsDbFile else None)
+            self._backendStore = db.open_store_with_retry(dsn)
+            self.roomsDbFile = dsn
+            # Permanent rooms: the DB table is the source of truth. Seed it
+            # once from the legacy text file when the table is still empty.
+            permanentRooms = self._backendStore.list_permanent()
+            if not permanentRooms and self.permanentRoomsFile is not None:
+                legacy = self.loadListFromMultilineTextFile(self.permanentRoomsFile)
+                if legacy:
+                    self._backendStore.seed_permanent(legacy)
+                    permanentRooms = self._backendStore.list_permanent()
+            self._roomManager = RoomManager(store=self._backendStore, permanentRooms=permanentRooms)
+            self._healthPublisher = HealthPublisher(self._backendStore, self._roomManager, syncplay.version)
+            self._healthPublisher.start()
         else:
-            self._roomManager = PublicRoomManager()
+            self._backendStore = None
+            self._healthPublisher = None
+            self._roomManager = PublicRoomManager() if isolateRooms else RoomManager()
         if statsDbFile is not None:
             self._statsDbHandle = StatsDBManager(statsDbFile)
             self._statsRecorder = StatsRecorder(self._statsDbHandle, self._roomManager)
@@ -355,6 +374,60 @@ class RoomsRecorder(StatsRecorder):
         except:
             pass
 
+
+class HealthPublisher(object):
+    """Publishes server health + live room status into the backend store.
+
+    Writes ``server_info`` (version, started_at, last heartbeat) and a
+    ``room_status`` snapshot (watchers, play state, position, playlist size)
+    every ``interval`` seconds so the admin app can report live health without
+    any IPC to the Twisted reactor. Mirrors the StatsRecorder pattern.
+    """
+
+    INTERVAL = 30
+
+    def __init__(self, store, roomManager, serverVersion):
+        self._store = store
+        self._roomManagerHandle = roomManager
+        self._serverVersion = serverVersion
+        self._timer = None
+
+    def start(self, delay=0):
+        try:
+            self._store.set_server_info("version", self._serverVersion)
+            self._store.set_server_info("started_at", int(time.time()))
+            self._heartbeat()
+            self._timer = task.LoopingCall(self._tick)
+            self._timer.start(self.INTERVAL)
+        except Exception as e:
+            print(f"--- Error initializing health publisher: {e} ---")
+
+    def _tick(self):
+        try:
+            self._heartbeat()
+            self._snapshotRooms()
+        except Exception as e:
+            print(f"--- health publisher error: {e} ---")
+
+    def _heartbeat(self):
+        self._store.set_server_info("updated_at", int(time.time()))
+
+    def _snapshotRooms(self):
+        now = int(time.time())
+        rows = []
+        rooms = self._roomManagerHandle.exportRooms()
+        for room in rooms.values():
+            watchers = len(room.getWatchers())
+            rows.append((
+                room.getName(),
+                watchers,
+                1 if room.isPlaying() else 0,
+                float(room.getPosition() or 0),
+                len(room.getPlaylist() or []),
+                now,
+            ))
+        self._store.snapshot_room_status(rows)
+
 class StatsDBManager(object):
     def __init__(self, dbpath):
         self._dbPath = dbpath
@@ -377,45 +450,53 @@ class StatsDBManager(object):
         self._connection.runQuery("INSERT INTO clients_snapshots VALUES (?, ?)", content)
 
 class RoomDBManager(object):
-    def __init__(self, dbpath, loadroomscallback):
-        self._dbPath = dbpath
-        self._connection = None
+    """Room persistence backed by the shared backend store (db.BackendStore).
+
+    The original implementation hardcoded an adbapi SQLite pool. This version
+    delegates to the same backend as the history proxy and admin app, so rooms
+    can live in Postgres (or SQLite) with a single DSN.
+
+    The public surface (saveRoom/deleteRoom/loadRooms/loadedRooms + the
+    loadrooms callback) is unchanged, so Room/RoomManager/Watcher need no
+    modifications.
+    """
+
+    def __init__(self, store, loadroomscallback):
+        self._store = store
         self._loadRoomsCallback = loadroomscallback
 
     def __del__(self):
-        if self._connection is not None:
-            self._connection.close()
+        pass
 
     def connect(self):
-        self._connection = adbapi.ConnectionPool("sqlite3", self._dbPath, check_same_thread=False)
-        self._createSchema().addCallback(self.loadRooms)
+        self._createSchema()
+        self.loadRooms()
 
     def _createSchema(self):
-        initQuery = 'create table if not exists persistent_rooms (name STRING PRIMARY KEY, playlist STRING, playlistIndex INTEGER, position REAL, lastSavedUpdate INTEGER)'
-        return self._connection.runQuery(initQuery)
+        # the schema is created by BackendStore on open; nothing to do here
+        pass
 
     def saveRoom(self, name, playlist, playlistIndex, position, lastUpdate):
-        content = (name, playlist, playlistIndex, position, lastUpdate)
-        self._connection.runQuery("INSERT OR REPLACE INTO persistent_rooms VALUES (?, ?, ?, ?, ?)", content)
+        self._store.save_room(name, playlist, playlistIndex, position, lastUpdate)
 
     def deleteRoom(self, name):
-        self._connection.runQuery("DELETE FROM persistent_rooms where name = ?", [name])
+        self._store.delete_room(name)
 
     def loadRooms(self, result=None):
-        roomsQuery = "SELECT * FROM persistent_rooms"
-        rooms = self._connection.runQuery(roomsQuery)
-        rooms.addCallback(self.loadedRooms)
+        rooms = self._store.load_rooms()
+        self.loadedRooms(rooms)
 
     def loadedRooms(self, rooms):
         self._loadRoomsCallback(rooms)
 
 class RoomManager(object):
-    def __init__(self, roomsdbfile=None, permanentRooms=[]):
+    def __init__(self, roomsdbfile=None, permanentRooms=[], store=None):
         self._roomsDbFile = roomsdbfile
         self._rooms = {}
         self._permanentRooms = permanentRooms
-        if self._roomsDbFile is not None:
-            self._roomsDbHandle = RoomDBManager(self._roomsDbFile, self.loadRooms)
+        self._store = store
+        if store is not None:
+            self._roomsDbHandle = RoomDBManager(store, self.loadRooms)
             self._roomsDbHandle.connect()
         else:
             self._roomsDbHandle = None
@@ -912,6 +993,7 @@ class ConfigurationGetter(object):
         self._argparser.add_argument('--max-chat-message-length', metavar='maxChatMessageLength', type=int, nargs='?', help=getMessage("server-chat-maxchars-argument").format(constants.MAX_CHAT_MESSAGE_LENGTH))
         self._argparser.add_argument('--max-username-length', metavar='maxUsernameLength', type=int, nargs='?', help=getMessage("server-maxusernamelength-argument").format(constants.MAX_USERNAME_LENGTH))
         self._argparser.add_argument('--stats-db-file', metavar='file', type=str, nargs='?', help=getMessage("server-stats-db-file-argument"))
+        self._argparser.add_argument('--backend-dsn', metavar='dsn', type=str, nargs='?', help='Database DSN for rooms and watch history (sqlite:/// or postgres://). Resolves from DB_* env vars, SYNCPLAY_DSN, HISTORY_DSN, then the SQLite default when omitted.')
         self._argparser.add_argument('--tls', metavar='path', type=str, nargs='?', help=getMessage("server-startTLS-argument"))
         self._argparser.add_argument('--ipv4-only', action='store_true', help=getMessage("server-listen-only-on-ipv4"))
         self._argparser.add_argument('--ipv6-only', action='store_true', help=getMessage("server-listen-only-on-ipv6"))

@@ -1,9 +1,9 @@
 # Syncplay watch-history (Docker)
 
-A single container runs the unmodified Syncplay server and a tiny transparent
-TCP proxy in front of it. The proxy forwards all client traffic to the server
-without altering it, while recording what is being watched into a SQLite
-database. No client-side changes are required.
+A single container runs the unmodified Syncplay server, a tiny transparent TCP
+proxy in front of it, and the admin web app. The proxy forwards all client
+traffic to the server without altering it, while recording what is being
+watched into a shared backend database. No client-side changes are required.
 
 ## What it records
 
@@ -14,15 +14,25 @@ database. No client-side changes are required.
   - `percentage` – `watched / duration * 100`
   - `stopped_at` – timestamp when the connection for that (room, file) closed
   - `started_at`, `last_seen`
+- `persistent_rooms` – saved room playlists/positions (written by the server).
+- `permanent_rooms` – undeletable room names (the DB is the source of truth;
+  seeded once from the legacy `permanent_rooms.txt` on first run).
+- `server_info` – server version, `started_at`, and a heartbeat (`updated_at`).
+- `room_status` – live snapshot of every room (watchers, play state, position).
 
 The watch status is owned by the room (keyed by room + file), as requested.
 
 ## Database (DSN)
 
-The backend is selected with a single DSN, via the `HISTORY_DSN` environment
-variable (or the `--dsn` flag of `history.py`).
+One shared backend serves rooms, watch history, and the admin app. It is
+selected with a single DSN, resolved in this order:
 
-- **Default (SQLite):** `sqlite:////data/history.sqlite`
+1. `DB_*` env vars (`DB_HOST` set) → Postgres
+2. `SYNCPLAY_DSN` (full DSN string)
+3. `HISTORY_DSN` (legacy alias)
+4. built-in SQLite default `sqlite:////data/syncplay.sqlite`
+
+- **Default (SQLite):** `sqlite:////data/syncplay.sqlite`
 - **Postgres:** `postgres://user:password@host:5432/dbname`
 
 ```sh
@@ -35,13 +45,14 @@ docker run -d --name syncplay-history \
 # Postgres
 docker run -d --name syncplay-history \
   -p 12346:12346 \
-  -e HISTORY_DSN='postgres://user:password@dbhost:5432/syncplay_history' \
+  -e SYNCPLAY_DSN='postgres://user:password@dbhost:5432/syncplay_history' \
   syncplay-history
 ```
 
 SQLite is the default, so no configuration is needed for the common case.
 The supported backends are SQLite and Postgres only; MariaDB and MySQL are out
-of scope.
+of scope. The previous per-feature files (`history.sqlite`, `rooms.sqlite`,
+`permanent_rooms.txt`) are replaced by this single DB.
 
 ## Build and run
 
@@ -134,8 +145,7 @@ unmodified server code; the rest are mapped by `entrypoint.sh`.
 | `SYNCPLAY_DISABLE_READY` | `--disable-ready` | `false` | Boolean. |
 | `SYNCPLAY_DISABLE_CHAT` | `--disable-chat` | `false` | Boolean. |
 | `SYNCPLAY_MOTD_FILE` | `--motd-file` | — | Path inside the container to the MOTD file. |
-| `SYNCPLAY_ROOMS_DB_FILE` | `--rooms-db-file` | — | Enables room persistence (SQLite file, e.g. `/data/rooms.sqlite`). SQLite-only; left off in the all-Postgres deployment. |
-| `SYNCPLAY_PERMANENT_ROOMS_FILE` | `--permanent-rooms-file` | — | Requires room persistence. One room name per line. |
+| `SYNCPLAY_PERMANENT_ROOMS_FILE` | `--permanent-rooms-file` | — | Legacy one-time seed of permanent rooms (read only when the `permanent_rooms` table is empty; the DB is the source of truth). |
 | `SYNCPLAY_MAX_CHAT_MESSAGE_LENGTH` | `--max-chat-message-length` | `150` | Integer. |
 | `SYNCPLAY_MAX_USERNAME_LENGTH` | `--max-username-length` | `16` | Integer. |
 | `SYNCPLAY_STATS_DB_FILE` | `--stats-db-file` | — | Enables server statistics (SQLite file). |
@@ -145,24 +155,26 @@ unmodified server code; the rest are mapped by `entrypoint.sh`.
 | `SYNCPLAY_INTERFACE_IPV4` | `--interface-ipv4` | — | Bind interface for IPv4. |
 | `SYNCPLAY_INTERFACE_IPV6` | `--interface-ipv6` | — | Bind interface for IPv6. |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | — | — | `config.env`. Non-secret DB connection parts. Leave `DB_HOST` empty for the SQLite default. |
-| `DB_PASS` | — | — | `.secrets.env`. Watch-history DB password. |
+| `DB_PASS` | — | — | `.secrets.env`. Backend DB password. |
 | `PROXY_PORT` | — | `12346` | `config.env`. The port clients connect to (the proxy). |
-| `HISTORY_DSN` | — | `sqlite:////data/history.sqlite` | Optional full DSN; used only when `DB_HOST` is not set — the `DB_*` parts take precedence over it. |
+| `ADMIN_PORT` | — | `12347` | `config.env`. Admin web app port (loopback only). |
+| `ADMIN_TOKEN` | — | unset (open) | `.secrets.env`. Optional bearer token for the admin API. |
+| `SYNCPLAY_DSN` | — | `sqlite:////data/syncplay.sqlite` | Optional full DSN; used when `DB_HOST` is not set. |
+| `HISTORY_DSN` | — | — | Legacy alias of `SYNCPLAY_DSN` (same precedence slot). |
 
-File-based options (`--motd-file`, `--rooms-db-file`, `--permanent-rooms-file`,
-`--stats-db-file`, `--tls`) take a **path inside the container**. Mount or copy
-the files in, e.g. `docker run -v /host/certs:/app/tls -e
-SYNCPLAY_TLS_PATH=/app/tls ...`.
+File-based options (`--motd-file`, `--permanent-rooms-file`, `--stats-db-file`,
+`--tls`) take a **path inside the container**. Mount or copy the files in, e.g.
+`docker run -v /host/certs:/app/tls -e SYNCPLAY_TLS_PATH=/app/tls ...`.
 
 Example with a few extra options set (the password stays in `.secrets.env`):
 
 ```sh
 # put non-secret extras in config.env, e.g.
-#   SYNCPLAY_ROOMS_DB_FILE=/data/rooms.sqlite
 #   SYNCPLAY_MAX_USERNAME_LENGTH=30
 # and put secrets in .secrets.env, e.g.
 #   DB_PASS=secret
 #   SYNCPLAY_SALT=my-stable-salt
+#   ADMIN_TOKEN=my-admin-token
 docker run -d --name syncplay-history \
   -p 12346:12346 \
   -v syncplay_history_data:/data \
@@ -179,59 +191,84 @@ docker run -d --name syncplay-history \
   ways between the client and the server, and parses the newline-delimited JSON
   Syncplay protocol to capture `Hello` (username), `Set.room`, `Set.file`
   (name/size/duration) and `State` (playstate position).
-- `entrypoint.sh` starts both the server and the proxy in the same container.
-- The Syncplay client/server code is not modified.
+- `syncplay/server.py` (a small modification of the upstream server) persists
+  rooms and permanent rooms in the same backend DB, and publishes a heartbeat
+  + `room_status` snapshot every 30 s.
+- `syncplay/admin.py` is the FastAPI admin web app (port 12347, loopback only).
+- `entrypoint.sh` starts and supervises the server, the proxy, and the admin
+  app in the same container.
+- The Syncplay client code is not modified.
+
+## Admin web app
+
+The admin app exposes health, room management, watch history, and users over
+HTTP on port **12347**, bound to `127.0.0.1` — expose it through the same
+same-host reverse proxy as the main service (a Caddy `handle`/location block or
+nginx `location /` proxying to `127.0.0.1:12347`).
+
+- **No login required by default.** Set `ADMIN_TOKEN` (in `.secrets.env`) to
+  require an `X-Admin-Token` header (or `?token=` query param) on all `/api/*`
+  endpoints. The static page itself stays open; the API calls on it carry the
+  token when the page is opened as `/?token=...`.
+- **Room passwords are stored plaintext** in the backend DB (`room_passwords`
+  table) so an operator can view/change them; the server itself never reads
+  that table — it verifies from the room-name hash + salt. If you set room
+  passwords, set `ADMIN_TOKEN` (or put auth on the reverse-proxy location) so
+  in-container access to `127.0.0.1:12347` cannot enumerate them. The admin
+  also inherits `SYNCPLAY_SALT` from `.secrets.env` to display the derived
+  `+room:hash` name — keep it in sync with the server's salt.
+- **Changes apply on restart.** Room/playlist/permanent changes are written to
+  the backend DB and read by the server at its next startup (`docker compose
+  restart syncplay`).
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/` | GET | The admin page (static, vanilla JS). |
+| `/api/health` | GET | Server version, uptime, heartbeat age, `alive` flag, DB status, active/permanent room counts, user count. |
+| `/api/rooms` | GET | All rooms (persistent + permanent + live status). |
+| `/api/rooms` | POST | Create a room (`{name, permanent?}`). 409 if it exists. |
+| `/api/rooms/{name}` | GET | One room incl. its playlist. |
+| `/api/rooms/{name}` | DELETE | Delete a non-permanent room. 409 if permanent. |
+| `/api/rooms/{name}/permanent` | POST | Set/unset permanent (`{permanent}`). |
+| `/api/rooms/{name}/playlist` | POST | Set playlist (`{playlist: [...], index?}`). |
+| `/api/rooms/{name}/password` | GET | Stored controlled-room password (404 if room missing / none set). |
+| `/api/rooms/{name}/password` | POST | Set/change password (`{password}`, format `XX-000-000`). 404 if room unknown, 400 on a `+name:hash` form. |
+| `/api/rooms/{name}/password` | DELETE | Remove the stored password. |
+| `/api/history` | GET | Watch history (`?room=`, `?q=`, `?limit=`). |
+| `/api/users` | GET | Usernames with first/last seen (`?limit=`). |
 
 ## Inspecting the history
 
-Always query the database **inside the running container**.
+Always query the database **inside the running container** (or through the
+admin app).
 
 ```sh
 docker exec syncplay-history python3 -c "
-import sqlite3
-c = sqlite3.connect('/data/history.sqlite')
-print(c.execute('select * from users').fetchall())
-for r in c.execute('select room,file,size,watched,percentage,duration,stopped_at from watch_history'):
-    print(r)
+import sys; sys.path.insert(0, '/app/syncplay')
+import db
+s = db.open_store_with_retry()
+print('users:', s.list_users())
+print('history:', s.query_history())
+print('rooms:', s.load_rooms())
+print('permanent:', s.list_permanent())
 "
 ```
 
-With a Postgres DSN, query through the same container (it has `psycopg2`; the
-password comes from the mounted `.secrets.env`, which a plain `docker exec`
-does not load automatically):
-
-```sh
-docker exec syncplay-history python3 -c "
-import os, psycopg2
-try:
-    for line in open('/app/.secrets.env'):
-        line = line.strip()
-        if line and not line.startswith('#') and '=' in line:
-            k, v = line.split('=', 1)
-            os.environ.setdefault(k.strip(), v.strip())
-except FileNotFoundError:
-    pass
-dsn = 'postgres://%s:%s@%s:%s/%s' % (
-    os.environ['DB_USER'], os.environ.get('DB_PASS', ''),
-    os.environ['DB_HOST'], os.environ.get('DB_PORT', '5432'), os.environ['DB_NAME'])
-cur = psycopg2.connect(dsn).cursor()
-print('users:', cur.execute('select * from users').fetchall())
-print('history:', cur.execute('select room, file, size, watched, percentage, duration, stopped_at from watch_history').fetchall())
-"
-```
+With a Postgres DSN, the same container code resolves the DSN from the mounted
+`.secrets.env` + `config.env` (the password is never on a command line).
 
 ### Why not `docker cp` the file out?
 
 The database uses SQLite **WAL mode** (for concurrent reads). Recent writes
-live in `history.sqlite-wal` until a checkpoint merges them into the main file.
-Copying only `history.sqlite` while the container runs (or right after a stop)
+live in `syncplay.sqlite-wal` until a checkpoint merges them into the main file.
+Copying only `syncplay.sqlite` while the container runs (or right after a stop)
 can give an outdated or empty database — the classic `no such table` trap.
 
 To get a consistent copy for offline inspection, checkpoint first:
 
 ```sh
-docker exec syncplay-history python3 -c "import sqlite3; c = sqlite3.connect('/data/history.sqlite'); c.execute('pragma wal_checkpoint(TRUNCATE)'); c.close()"
-docker cp syncplay-history:/data/history.sqlite ./history.sqlite
+docker exec syncplay-history python3 -c "import sqlite3; c = sqlite3.connect('/data/syncplay.sqlite'); c.execute('pragma wal_checkpoint(TRUNCATE)'); c.close()"
+docker cp syncplay-history:/data/syncplay.sqlite ./syncplay.sqlite
 ```
 
 The proxy also runs an automatic `TRUNCATE` checkpoint every 30 seconds, so the
@@ -252,6 +289,11 @@ docker exec syncplay-history python3 /tmp/tc.py --username tester --room test-ro
 Then inspect the database (see above) — you should see a `tester` user and a
 `watch_history` row for the room/file.
 
+`simulate_clients.py` runs the S1–S10 scenario matrix against the live proxy.
+`test_rooms_persistence.py` and `test_admin_smoke.py` are the E2E checks for
+rooms persistence and the admin API. Host-side unit tests live in `tests/`
+(`make test`).
+
 ## Linting
 
 The watch-history code we own is linted with [ruff](https://docs.astral.sh/ruff/)
@@ -259,7 +301,7 @@ The watch-history code we own is linted with [ruff](https://docs.astral.sh/ruff/
 — they are upstream code and must not be modified, so we don't lint them.
 
 ```sh
-ruff check          # lints only syncplay/history.py and test_client.py
+ruff check          # lints only the files listed in ruff.toml
 ```
 
 `ruff` is the linter that honors the project config. The editor's built-in type

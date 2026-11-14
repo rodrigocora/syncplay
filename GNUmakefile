@@ -163,6 +163,20 @@ logs:
 down:
 	$(DOCKER) rm -f $(CONTAINER) || true
 
+# --- Tests -----------------------------------------------------------------
+# Host-side unit tests (pytest). Install dev deps first:
+#   python -m pip install -r requirements-dev.txt
+test:
+	python -m pytest tests/ -v
+
+# E2E against the running container (proxy + admin + rooms persistence).
+# Requires the container to be up and reachable on the proxy port.
+test-e2e:
+	docker cp test_client.py $(CONTAINER):/tmp/tc.py && docker exec $(CONTAINER) python3 /tmp/tc.py
+	docker cp simulate_clients.py $(CONTAINER):/tmp/sim.py && docker exec $(CONTAINER) python3 /tmp/sim.py
+	docker cp test_rooms_persistence.py $(CONTAINER):/tmp/rooms.py && docker exec $(CONTAINER) python3 /tmp/rooms.py
+	docker cp test_admin_smoke.py $(CONTAINER):/tmp/admin.py && docker exec $(CONTAINER) python3 /tmp/admin.py
+
 install: common client server warnings
 
 uninstall: u-server u-common

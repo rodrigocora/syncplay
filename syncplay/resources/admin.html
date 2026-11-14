@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>syncplay-history admin</title>
+<style>
+  /* Visual language borrowed from motherduck.com: warm cream background,
+     dark ink, monospace type, hairline borders, 2px radius, playful accents
+     (garden green / sky blue / sun yellow / watermelon red). */
+  :root {
+    --ink: #383838;
+    --ink-muted: #818181;
+    --hairline: #d7d7d7;
+    --border: #383838;
+    --bg: #f4efea;
+    --surface: #f8f8f7;
+    --panel: #ffffff;
+    --chrome: #ece6df;
+    --garden: #16aa98;
+    --garden-strong: #068475;
+    --sky: #2ba5ff;
+    --sun: #ffde00;
+    --sun-strong: #bfa800;
+    --watermelon: #ff7169;
+    --watermelon-strong: #e23f35;
+    --mono: "Aeonik Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    padding: 1.5rem;
+    font-size: .9rem;
+    line-height: 1.45;
+  }
+  header.brand { display: flex; gap: .75rem; align-items: flex-start; margin-bottom: 1.25rem; }
+  .brand-mark {
+    width: 1.4rem; height: 1.4rem; flex: 0 0 auto; margin-top: .1rem;
+    background: var(--sun); border: 1px solid var(--border); border-radius: 2px;
+  }
+  h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  h2 { font-size: .8rem; font-weight: 600; margin: 2rem 0 .75rem; text-transform: uppercase; letter-spacing: .1em; }
+  .strip { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .card {
+    background: var(--panel); border: 1px solid var(--hairline); border-radius: 2px;
+    padding: .5rem .8rem; min-width: 9rem;
+    transition: transform .1s ease, box-shadow .1s ease;
+  }
+  .card:hover { transform: translate(2px, -2px); box-shadow: -4px 4px 0 0 var(--hairline); }
+  .card .label { font-size: .68rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card .value { font-size: 1.05rem; font-weight: 600; }
+  .pill { padding: .2rem .65rem; border-radius: 999px; font-weight: 700; font-size: .78rem; letter-spacing: .06em; }
+  .pill.ok { background: var(--garden); color: #fff; }
+  .pill.bad { background: var(--watermelon-strong); color: #fff; }
+  .pill.stale { background: var(--sun); color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; margin-top: .5rem; font-size: .82rem; background: var(--panel); }
+  th, td { border: 1px solid var(--hairline); padding: .35rem .6rem; text-align: left; vertical-align: top; }
+  th {
+    background: var(--chrome); color: var(--ink); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; font-size: .7rem;
+  }
+  tbody tr:hover { background: var(--surface); }
+  .muted { color: var(--ink-muted); }
+  input[type=text], textarea, select {
+    font-family: var(--mono); font-size: .85rem; color: var(--ink);
+    padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 2px;
+    background: var(--panel);
+  }
+  /* Hover effect borrowed from motherduck.com: lift up-right with a hard
+     offset shadow (translate(3px,-3px) / shadow -6px 6px 0). */
+  button {
+    font-family: var(--mono); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em;
+    padding: .45rem .8rem; border: 1px solid var(--border); border-radius: 2px;
+    background: transparent; color: var(--ink); cursor: pointer;
+    transition: transform .1s ease, box-shadow .1s ease, background-color .1s ease, color .1s ease;
+  }
+  button:hover:not(:disabled) {
+    transform: translate(3px, -3px);
+    box-shadow: -6px 6px 0 0 var(--ink);
+    background: var(--sun);
+  }
+  button.danger { color: var(--watermelon-strong); border-color: var(--watermelon-strong); }
+  button.danger:hover:not(:disabled) {
+    transform: translate(3px, -3px);
+    box-shadow: -6px 6px 0 0 var(--watermelon-strong);
+    background: var(--watermelon-strong); color: #fff;
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .row-actions { white-space: nowrap; }
+  dialog {
+    border: 1px solid var(--border); border-radius: 4px; padding: 1.25rem;
+    background: var(--panel); color: var(--ink); font-family: var(--mono);
+  }
+  dialog::backdrop { background: rgba(56,56,56,.45); }
+  .error { color: var(--watermelon-strong); font-size: .85rem; }
+  .note { font-size: .8rem; color: var(--ink-muted); }
+  .flex { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header class="brand">
+  <div class="brand-mark"></div>
+  <div>
+    <h1>syncplay-history admin</h1>
+    <p class="note">Changes apply on the next server restart. <span id="tokenNote"></span></p>
+  </div>
+</header>
+
+<div class="strip" id="healthStrip">
+  <span class="pill stale" id="alivePill">…</span>
+  <div class="card"><div class="label">Version</div><div class="value" id="hVersion">–</div></div>
+  <div class="card"><div class="label">Uptime</div><div class="value" id="hUptime">–</div></div>
+  <div class="card"><div class="label">Last heartbeat</div><div class="value" id="hHeartbeat">–</div></div>
+  <div class="card"><div class="label">DB</div><div class="value" id="hDb">–</div></div>
+  <div class="card"><div class="label">Active rooms</div><div class="value" id="hRooms">–</div></div>
+  <div class="card"><div class="label">Users</div><div class="value" id="hUsers">–</div></div>
+</div>
+
+<h2>Rooms</h2>
+<div class="flex">
+  <input type="text" id="newRoomName" placeholder="room name" size="24">
+  <label><input type="checkbox" id="newRoomPermanent"> permanent</label>
+  <button id="btnCreateRoom">Create room</button>
+  <span class="error" id="roomError"></span>
+</div>
+<table id="roomsTable">
+  <thead><tr><th>Name</th><th>Persistent</th><th>Permanent</th><th>Watchers</th><th>Playing</th><th>Position</th><th>Playlist</th><th>Password</th><th>Actions</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Watch history</h2>
+<div class="flex">
+  <input type="text" id="histQ" placeholder="filter room/file…" size="30">
+  <button id="btnHistFilter">Filter</button>
+  <span class="muted" id="histCount"></span>
+</div>
+<table id="histTable">
+  <thead><tr><th>Room</th><th>File</th><th>Size</th><th>Watched (s)</th><th>%</th><th>Duration</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Users</h2>
+<table id="usersTable">
+  <thead><tr><th>Username</th><th>First seen</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<dialog id="playlistDialog">
+  <h3 id="playlistTitle">Set playlist</h3>
+  <textarea id="playlistText" rows="8" cols="60" placeholder="one file per line"></textarea>
+  <div class="flex">
+    <button id="btnSavePlaylist">Save</button>
+    <button id="btnCancelPlaylist">Cancel</button>
+    <span class="error" id="playlistError"></span>
+  </div>
+</dialog>
+
+<dialog id="passwordDialog">
+  <h3 id="passwordTitle">Set password</h3>
+  <p class="note">Controlled room password (format <code>XX-000-000</code>). Requires a stable <code>SYNCPLAY_SALT</code>; the server derives the <code>+room:hash</code> name when a client joins.</p>
+  <input type="text" id="passwordText" placeholder="AB-123-456" size="16">
+  <div class="flex">
+    <button id="btnSavePassword">Save</button>
+    <button id="btnCancelPassword">Cancel</button>
+    <button id="btnDeletePassword" class="danger">Remove</button>
+    <span class="error" id="passwordError"></span>
+  </div>
+</dialog>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const headers = { "Content-Type": "application/json" };
+if (TOKEN) headers["X-Admin-Token"] = TOKEN;
+document.getElementById("tokenNote").textContent = TOKEN ? "(token auth active)" : "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const j = await res.json(); detail = j.detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+function fmtTime(ts) {
+  if (!ts) return "–";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString();
+}
+function fmtDur(s) {
+  if (s == null) return "–";
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m + "m" + sec + "s";
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadHealth() {
+  try {
+    const h = await api("/api/health");
+    const s = h.server;
+    document.getElementById("alivePill").className = "pill " + (s.alive ? "ok" : "stale");
+    document.getElementById("alivePill").textContent = s.alive ? "LIVE" : "STALE";
+    document.getElementById("hVersion").textContent = s.version || "–";
+    document.getElementById("hUptime").textContent = fmtDur(s.uptime_s);
+    document.getElementById("hHeartbeat").textContent = s.last_heartbeat ? (Math.round((Date.now()/1000 - s.last_heartbeat)) + "s ago") : "–";
+    document.getElementById("hDb").textContent = s.db_ok ? "ok" : "FAIL";
+    document.getElementById("hRooms").textContent = h.rooms.active + " active / " + h.rooms.permanent + " permanent";
+    document.getElementById("hUsers").textContent = h.users.total;
+  } catch (e) {
+    document.getElementById("alivePill").className = "pill bad";
+    document.getElementById("alivePill").textContent = "ERR";
+  }
+}
+
+async function loadRooms() {
+  const tbody = document.querySelector("#roomsTable tbody");
+  try {
+    const { rooms } = await api("/api/rooms");
+    const passwords = {};
+    for (const r of rooms) {
+      try { passwords[r.name] = (await api("/api/rooms/" + encodeURIComponent(r.name) + "/password")).password; }
+      catch { passwords[r.name] = null; }
+    }
+    tbody.innerHTML = rooms.map(r => `<tr>
+      <td>${esc(r.name)}</td>
+      <td>${r.persistent ? "yes" : "–"}</td>
+      <td>${r.permanent ? "yes" : "–"}</td>
+      <td>${r.watchers}</td>
+      <td>${r.playing ? "yes" : "–"}</td>
+      <td>${r.position != null ? Math.round(r.position) + "s" : "–"}</td>
+      <td>${r.playlist_size || (r.playlist && r.playlist.length) || 0}</td>
+      <td>${passwords[r.name] ? esc(passwords[r.name]) : "–"}</td>
+      <td class="row-actions">
+        <button data-act="playlist" data-name="${esc(r.name)}">Playlist</button>
+        <button data-act="password" data-name="${esc(r.name)}">Password</button>
+        <button data-act="perm" data-name="${esc(r.name)}">${r.permanent ? "Un-perm" : "Make perm"}</button>
+        <button data-act="del" data-name="${esc(r.name)}" class="danger" ${r.permanent ? "disabled" : ""}>Delete</button>
+      </td>
+    </tr>`).join("");
+    tbody.querySelectorAll("button").forEach(btn => btn.addEventListener("click", onRoomAction));
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="9" class="error">${esc(e.message)}</td></tr>`;
+  }
+}
+
+let currentRoom = null;
+function onRoomAction(e) {
+  const act = e.target.dataset.act, name = e.target.dataset.name;
+  if (act === "del") {
+    if (!confirm("Delete room " + name + "?")) return;
+    api("/api/rooms/" + encodeURIComponent(name), { method: "DELETE" })
+      .then(() => { document.getElementById("roomError").textContent = ""; loadRooms(); })
+      .catch(err => { document.getElementById("roomError").textContent = err.message; });
+  } else if (act === "perm") {
+    api("/api/rooms/" + encodeURIComponent(name) + "/permanent", {
+      method: "POST", body: JSON.stringify({ permanent: e.target.textContent.startsWith("Make") })
+    }).then(() => loadRooms()).catch(err => { document.getElementById("roomError").textContent = err.message; });
+  } else if (act === "playlist") {
+    currentRoom = name;
+    api("/api/rooms/" + encodeURIComponent(name))
+      .then(r => {
+        document.getElementById("playlistTitle").textContent = "Set playlist — " + name;
+        document.getElementById("playlistText").value = (r.playlist || []).join("\n");
+        document.getElementById("playlistError").textContent = "";
+        document.getElementById("playlistDialog").showModal();
+      })
+      .catch(err => { document.getElementById("roomError").textContent = err.message; });
+  } else if (act === "password") {
+    currentRoom = name;
+    api("/api/rooms/" + encodeURIComponent(name) + "/password")
+      .then(r => {
+        document.getElementById("passwordTitle").textContent = "Set password — " + name;
+        document.getElementById("passwordText").value = r.password || "";
+        document.getElementById("passwordError").textContent = "";
+        document.getElementById("btnDeletePassword").style.display = r.password ? "" : "none";
+        document.getElementById("passwordDialog").showModal();
+      })
+      .catch(() => {
+        // no password set yet
+        document.getElementById("passwordTitle").textContent = "Set password — " + name;
+        document.getElementById("passwordText").value = "";
+        document.getElementById("passwordError").textContent = "";
+        document.getElementById("btnDeletePassword").style.display = "none";
+        document.getElementById("passwordDialog").showModal();
+      });
+  }
+}
+
+document.getElementById("btnSavePlaylist").addEventListener("click", () => {
+  const files = document.getElementById("playlistText").value.split("\n").map(s => s.trim()).filter(Boolean);
+  api("/api/rooms/" + encodeURIComponent(currentRoom) + "/playlist", {
+    method: "POST", body: JSON.stringify({ playlist: files })
+  }).then(() => { document.getElementById("playlistDialog").close(); loadRooms(); })
+    .catch(err => { document.getElementById("playlistError").textContent = err.message; });
+});
+document.getElementById("btnCancelPlaylist").addEventListener("click", () => document.getElementById("playlistDialog").close());
+
+document.getElementById("btnSavePassword").addEventListener("click", () => {
+  const password = document.getElementById("passwordText").value.trim();
+  if (!/^[A-Z]{2}-\d{3}-\d{3}$/.test(password)) {
+    document.getElementById("passwordError").textContent = "Password must match XX-000-000";
+    return;
+  }
+  api("/api/rooms/" + encodeURIComponent(currentRoom) + "/password", {
+    method: "POST", body: JSON.stringify({ password })
+  }).then(() => { document.getElementById("passwordDialog").close(); loadRooms(); })
+    .catch(err => { document.getElementById("passwordError").textContent = err.message; });
+});
+document.getElementById("btnCancelPassword").addEventListener("click", () => document.getElementById("passwordDialog").close());
+document.getElementById("btnDeletePassword").addEventListener("click", () => {
+  api("/api/rooms/" + encodeURIComponent(currentRoom) + "/password", { method: "DELETE" })
+    .then(() => { document.getElementById("passwordDialog").close(); loadRooms(); })
+    .catch(err => { document.getElementById("passwordError").textContent = err.message; });
+});
+
+document.getElementById("btnCreateRoom").addEventListener("click", () => {
+  const name = document.getElementById("newRoomName").value.trim();
+  const permanent = document.getElementById("newRoomPermanent").checked;
+  if (!name) return;
+  api("/api/rooms", { method: "POST", body: JSON.stringify({ name, permanent }) })
+    .then(() => { document.getElementById("newRoomName").value = ""; loadRooms(); })
+    .catch(err => { document.getElementById("roomError").textContent = err.message; });
+});
+
+async function loadHistory() {
+  const q = document.getElementById("histQ").value.trim();
+  const url = q ? "/api/history?q=" + encodeURIComponent(q) : "/api/history";
+  const tbody = document.querySelector("#histTable tbody");
+  try {
+    const { rows } = await api(url);
+    document.getElementById("histCount").textContent = rows.length + " rows";
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td>${esc(r.room)}</td><td>${esc(r.file)}</td>
+      <td>${r.size ?? "–"}</td><td>${r.watched != null ? Math.round(r.watched) : "–"}</td>
+      <td>${r.percentage != null ? r.percentage.toFixed(1) + "%" : "–"}</td>
+      <td>${fmtDur(r.duration)}</td><td>${fmtTime(r.last_seen)}</td>
+    </tr>`).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="error">${esc(e.message)}</td></tr>`;
+  }
+}
+document.getElementById("btnHistFilter").addEventListener("click", loadHistory);
+
+async function loadUsers() {
+  const tbody = document.querySelector("#usersTable tbody");
+  try {
+    const { users } = await api("/api/users");
+    tbody.innerHTML = users.map(u => `<tr><td>${esc(u.username)}</td><td>${fmtTime(u.first_seen)}</td><td>${fmtTime(u.last_seen)}</td></tr>`).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="3" class="error">${esc(e.message)}</td></tr>`;
+  }
+}
+
+loadHealth(); loadRooms(); loadHistory(); loadUsers();
+setInterval(loadHealth, 30000);   // health strip auto-refresh
+setInterval(loadRooms, 30000);    // live room stats
+</script>
+</body>
+</html>

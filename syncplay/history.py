@@ -1,259 +1,13 @@
 import argparse
 import json
-import os
-import re
-import sqlite3
 import time
 
+# Runs as a script (python3 /app/syncplay/history.py), so the package is not on
+# sys.path; import the shared backend as a sibling module.
+import db
 from twisted.internet import reactor
 from twisted.internet.endpoints import TCP4ClientEndpoint, TCP4ServerEndpoint
 from twisted.internet.protocol import Factory, Protocol
-
-DEFAULT_DSN = "sqlite:////data/history.sqlite"
-
-
-def _db_path(path):
-    if not path.lower().endswith(".sqlite"):
-        path += ".sqlite"
-    return path
-
-
-def _dsnFromDbEnv():
-    # Build a postgres DSN from discrete DB_* env vars. The password comes
-    # from the environment only, so it never appears on a command line.
-    # Returns None if the host is not set (i.e. discrete vars are not in use).
-    host = os.environ.get("DB_HOST")
-    if not host:
-        return None
-    port = os.environ.get("DB_PORT") or "5432"
-    user = os.environ.get("DB_USER")
-    password = os.environ.get("DB_PASS")
-    dbname = os.environ.get("DB_NAME") or "history"
-    userinfo = "" if not user else (f"{user}@" if not password else f"{user}:{password}@")
-    return f"postgres://{userinfo}{host}:{port}/{dbname}"
-
-
-def _parseDsn(dsn):
-    scheme = dsn.split(":", 1)[0].lower()
-    if scheme == "sqlite":
-        # sqlite:///relative.sqlite  |  sqlite:////absolute.sqlite  |  sqlite:/:memory:
-        return "sqlite", dsn[len("sqlite:"):] or ":memory:"
-    if scheme in ("postgres", "postgresql"):
-        m = re.match(
-            r"^postgres(?:ql)?://(?:([^:@/]*)(?::([^@/]*))?@)?([a-zA-Z0-9.\-_]+)(?::(\d+))?(/[^?#]+)?", dsn
-        )
-        if not m:
-            raise ValueError("invalid DSN: " + dsn)
-        user, password, host, port, path = m.groups()
-        return "postgres", {
-            "host": host,
-            "port": int(port or 5432),
-            "user": user,
-            "password": password,
-            "dbname": (path or "/history").lstrip("/"),
-        }
-    raise ValueError("unsupported DSN scheme: " + dsn)
-
-
-def _redactDsn(dsn):
-    # hide the password in user:pass@host so it is safe to log
-    return re.sub(r"(?<=://)([^:/@]+):([^@/]+)@", r"\1:***@", dsn)
-
-
-class HistoryStore:
-    """SQLite-backed store."""
-
-    def __init__(self, dbPath):
-        self._dbPath = dbPath
-        self._createSchema()
-
-    def _createSchema(self):
-        self._conn = sqlite3.connect(self._dbPath, check_same_thread=False)
-        # WAL mode for concurrent reads (e.g. docker exec queries); checkpoint
-        # periodically so the main .sqlite file stays readable when copied out.
-        self._conn.execute("pragma journal_mode = WAL")
-        self._conn.execute("pragma wal_autocheckpoint = 100")
-        self._conn.execute(
-            "create table if not exists users (username text primary key, first_seen integer, last_seen integer)"
-        )
-        self._conn.execute(
-            "create table if not exists watch_history ("
-            " room text not null,"
-            " file text,"
-            " size integer,"
-            " watched real,"
-            " percentage real,"
-            " duration integer,"
-            " stopped_at integer default 0,"
-            " started_at integer,"
-            " last_seen integer,"
-            " primary key (room, file)"
-            ") without rowid"
-        )
-        self._conn.commit()
-
-    def _exec(self, query, params=()):
-        try:
-            self._conn.execute(query, params)
-            self._conn.commit()
-        except sqlite3.Error as e:
-            self._conn.rollback()
-            print("history store error:", e)
-
-    def upsertUser(self, username, now):
-        self._exec(
-            "insert into users (username, first_seen, last_seen) values (?, ?, ?) "
-            "on conflict(username) do update set last_seen = excluded.last_seen",
-            (username, now, now),
-        )
-
-    def upsertWatch(self, room, file, size, position, duration, now):
-        watched = position if position is not None else 0.0
-        percentage = None
-        if duration:
-            percentage = min(round(watched / float(duration) * 100.0, 4), 100.0)
-        self._exec(
-            "insert into watch_history (room, file, size, watched, percentage, duration, started_at, last_seen) "
-            "values (?, ?, ?, ?, ?, ?, ?, ?) "
-            "on conflict(room, file) do update set "
-            " size = coalesce(excluded.size, size),"
-            " watched = max(coalesce(watched, 0), coalesce(excluded.watched, 0)),"
-            " percentage = coalesce(excluded.percentage, percentage),"
-            " duration = coalesce(excluded.duration, duration),"
-            " stopped_at = 0,"
-            " last_seen = excluded.last_seen",
-            (room, file, size, watched, percentage, duration, now, now),
-        )
-
-    def recordStopped(self, room, file, position, now):
-        if not file:
-            return
-        watched = position if position is not None else 0.0
-        self._exec(
-            "insert into watch_history (room, file, watched, duration, stopped_at, started_at, last_seen) "
-            "values (?, ?, ?, 0, ?, ?, ?) "
-            "on conflict(room, file) do update set "
-            " watched = max(coalesce(watched, 0), coalesce(excluded.watched, 0)),"
-            " stopped_at = excluded.stopped_at,"
-            " last_seen = excluded.last_seen",
-            (room, file, watched, now, now, now),
-        )
-
-
-class PostgresHistoryStore:
-    """Postgres store using psycopg2 (lazy import)."""
-
-    def __init__(self, params):
-        import psycopg2
-
-        self._psycopg2 = psycopg2
-        self._conn = psycopg2.connect(
-            host=params["host"],
-            port=params["port"],
-            user=params["user"],
-            password=params["password"],
-            dbname=params["dbname"],
-        )
-        # autocommit so a single failed statement cannot abort the connection's
-        # transaction and poison every later write
-        self._conn.autocommit = True
-        self._createSchema()
-
-    def _createSchema(self):
-        cur = self._conn.cursor()
-        cur.execute(
-            "create table if not exists users ("
-            " username text primary key,"
-            " first_seen bigint, last_seen bigint)"
-        )
-        cur.execute(
-            "create table if not exists watch_history ("
-            " room text not null,"
-            " file text,"
-            " size bigint,"
-            " watched double precision,"
-            " percentage double precision,"
-            " duration bigint,"
-            " stopped_at bigint default 0,"
-            " started_at bigint,"
-            " last_seen bigint,"
-            " primary key (room, file))"
-        )
-
-    def _exec(self, query, params=()):
-        cur = self._conn.cursor()
-        try:
-            cur.execute(query, params)
-        except self._psycopg2.Error as e:
-            if not self._conn.autocommit:
-                self._conn.rollback()
-            print("history store error:", e)
-
-    def upsertUser(self, username, now):
-        self._exec(
-            "insert into users (username, first_seen, last_seen) values (%s, %s, %s) "
-            "on conflict(username) do update set last_seen = excluded.last_seen",
-            (username, now, now),
-        )
-
-    def upsertWatch(self, room, file, size, position, duration, now):
-        watched = position if position is not None else 0.0
-        percentage = None
-        if duration:
-            percentage = min(round(watched / float(duration) * 100.0, 4), 100.0)
-        self._exec(
-            "insert into watch_history (room, file, size, watched, percentage, duration, started_at, last_seen) "
-            "values (%s, %s, %s, %s, %s, %s, %s, %s) "
-            "on conflict(room, file) do update set "
-            " size = coalesce(excluded.size, watch_history.size),"
-            " watched = greatest(coalesce(watch_history.watched, 0), coalesce(excluded.watched, 0)),"
-            " percentage = coalesce(excluded.percentage, watch_history.percentage),"
-            " duration = coalesce(excluded.duration, watch_history.duration),"
-            " stopped_at = 0,"
-            " last_seen = excluded.last_seen",
-            (room, file, size, watched, percentage, duration, now, now),
-        )
-
-    def recordStopped(self, room, file, position, now):
-        if not file:
-            return
-        watched = position if position is not None else 0.0
-        self._exec(
-            "insert into watch_history (room, file, watched, duration, stopped_at, started_at, last_seen) "
-            "values (%s, %s, %s, 0, %s, %s, %s) "
-            "on conflict(room, file) do update set "
-            " watched = greatest(coalesce(watch_history.watched, 0), coalesce(excluded.watched, 0)),"
-            " stopped_at = excluded.stopped_at,"
-            " last_seen = excluded.last_seen",
-            (room, file, watched, now, now, now),
-        )
-
-
-def create_store(dsn):
-    if dsn == "auto":
-        dsn = _dsnFromDbEnv() or DEFAULT_DSN
-    scheme, rest = _parseDsn(dsn)
-    if scheme == "sqlite":
-        return HistoryStore(_db_path(rest))
-    if scheme == "postgres":
-        return PostgresHistoryStore(rest)
-    raise ValueError("unsupported DSN: " + dsn)
-
-
-def create_store_with_retry(dsn, attempts=5, delay=2.0):
-    # The DB may come up after the proxy does; retry briefly before giving up
-    # with a clear, actionable error instead of a bare traceback.
-    last_error = None
-    for attempt in range(1, attempts + 1):
-        try:
-            return create_store(dsn)
-        except Exception as e:
-            last_error = e
-            if attempt < attempts:
-                print(f"history store not ready ({_redactDsn(dsn)}): {e}; retry {attempt}/{attempts} in {delay}s")
-                time.sleep(delay)
-    print(f"history store unavailable at {_redactDsn(dsn)} after {attempts} attempts: {last_error}")
-    raise SystemExit(1)
 
 
 class RecordingState:
@@ -276,7 +30,7 @@ class RecordingState:
             if command == "Hello":
                 self._username = payload.get("username")
                 if self._username:
-                    self._store.upsertUser(self._username, now)
+                    self._store.upsert_user(self._username, now)
                 # the room name is in the Hello; a real client usually never
                 # sends a separate Set.room, so capture it here
                 room = payload.get("room")
@@ -296,13 +50,13 @@ class RecordingState:
                 if position is not None:
                     self._lastKnownPosition = position
                 if self._file and self._room:
-                    self._store.upsertWatch(
+                    self._store.upsert_watch(
                         self._room, self._file, self._size, position, self._duration, now
                     )
 
     def onDisconnect(self):
         if self._room and self._file:
-            self._store.recordStopped(self._room, self._file, self._lastKnownPosition, int(time.time()))
+            self._store.record_stopped(self._room, self._file, self._lastKnownPosition, int(time.time()))
 
 
 class UpstreamProtocol(Protocol):
@@ -396,21 +150,18 @@ class ClientFactory(Factory):
 def _checkpointLoop(store):
     while True:
         time.sleep(30)
-        try:
-            store._conn.execute("pragma wal_checkpoint(TRUNCATE)")
-        except sqlite3.Error as e:
-            print("history store checkpoint error:", e)
+        store.wal_checkpoint()
 
 
 def run(proxyPort, host, port, dsn):
-    store = create_store_with_retry(dsn)
+    store = db.open_store_with_retry(dsn)
     factory = ClientFactory(host, port, store)
     TCP4ServerEndpoint(reactor, proxyPort, interface="0.0.0.0").listen(factory)
     from twisted.internet import threads
 
-    if isinstance(store, HistoryStore):
+    if store.dialect == "sqlite":
         threads.deferToThread(_checkpointLoop, store)
-    print(f"history proxy listening on {proxyPort}, forwarding to {host}:{port}, dsn={_redactDsn(dsn)}")
+    print(f"history proxy listening on {proxyPort}, forwarding to {host}:{port}, dsn={db.redact_dsn(dsn)}")
     reactor.run()
 
 
@@ -422,15 +173,11 @@ def main():
     parser.add_argument(
         "--dsn",
         default=None,
-        help="database DSN. If omitted, builds one from the DB_* env vars, "
-        "falling back to HISTORY_DSN, then the SQLite default",
+        help="database DSN. If omitted, resolves from DB_* env vars, then "
+        "SYNCPLAY_DSN, then HISTORY_DSN, then the SQLite default",
     )
     args = parser.parse_args()
-    if args.dsn:
-        dsn = args.dsn
-    else:
-        # prefer discrete DB_* vars, then HISTORY_DSN, then SQLite default
-        dsn = _dsnFromDbEnv() or os.environ.get("HISTORY_DSN") or DEFAULT_DSN
+    dsn = db.resolve_dsn(args.dsn)
     run(args.port, args.upstream_host, args.upstream_port, dsn)
 
 

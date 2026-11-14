@@ -5,3 +5,5 @@ appnope>=0.1.0; sys_platform == 'darwin'
 pypiwin32>=223; sys_platform == 'win32'
 zope.interface>=4.4.0; sys_platform == 'win32'
 psycopg2-binary>=2.9
+fastapi>=0.115
+uvicorn[standard]>=0.30

@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 # Runtime dependencies for the Docker watch-history feature. These mirror
 # requirements.txt so that `uv sync` reproduces the container's environment
 # 1:1 (the image is built from requirements.txt and is headless -- server +
-# proxy only, no GUI). Keep this list in sync with requirements.txt.
+# proxy + admin only, no GUI). Keep this list in sync with requirements.txt.
 dependencies = [
     "certifi>=2018.11.29",
     "pem>=21.2.0",
@@ -14,6 +14,8 @@ dependencies = [
     "appnope>=1.0.0; sys_platform == 'darwin'",
     "zope.interface>=4.4.0; sys_platform == 'win32'",
     "psycopg2-binary>=2.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
 ]
 
 # Optional: the GUI client (PySide + requests). Not used by the headless Docker

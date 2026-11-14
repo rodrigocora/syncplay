@@ -12,13 +12,19 @@
 target-version = "py313"
 
 # Lint only the files this project owns. The `syncplay/` package itself is
-# upstream, with the single exception of the proxy module we added.
-extend-include = ["syncplay/history.py"]
+# upstream, with the exception of the modules we added for the Docker
+# watch-history feature.
+extend-include = ["syncplay/history.py", "syncplay/db.py", "syncplay/admin.py"]
 
 include = [
     "test_client.py",
     "simulate_clients.py",
+    "test_rooms_persistence.py",
+    "test_admin_smoke.py",
     "syncplay/history.py",
+    "syncplay/db.py",
+    "syncplay/admin.py",
+    "tests/*.py",
 ]
 
 # The original code is full of legacy patterns; we do not want those rules
