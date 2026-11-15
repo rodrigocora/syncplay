@@ -8,7 +8,10 @@ services:
       # loopback only: the server is meant to be reached through a same-host
       # reverse proxy (see DOCKER.md, "Behind a reverse proxy")
       - "127.0.0.1:12346:12346"
-      # admin web app (loopback only, expose through the same reverse proxy)
+      # admin web app: published on the host's loopback only (expose through
+      # the same reverse proxy, or reach it via ssh -L 12347:127.0.0.1:12347).
+      # The container itself binds 0.0.0.0 (entrypoint.sh --host 0.0.0.0)
+      # because Docker port mapping only reaches the container network IP.
       - "127.0.0.1:12347:12347"
     environment:
       # Internal port the syncplay server listens on (the proxy forwards to it).

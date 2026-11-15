@@ -123,9 +123,11 @@ proxy_cmd = [
 ]
 proxy_proc = subprocess.Popen(proxy_cmd)
 
-# Admin web app (loopback-only; expose through the reverse proxy).
+# Admin web app. Binds 0.0.0.0 *inside* the container (Docker port mapping
+# only reaches the container network IP, not its loopback); the compose
+# "127.0.0.1:12347:12347" mapping keeps the published port host-loopback-only.
 admin_port = env("ADMIN_PORT", "12347")
-admin_cmd = ["python3", "/app/syncplay/admin.py", "--port", admin_port]
+admin_cmd = ["python3", "/app/syncplay/admin.py", "--host", "0.0.0.0", "--port", admin_port]
 admin_proc = subprocess.Popen(admin_cmd)
 
 

@@ -194,7 +194,8 @@ docker run -d --name syncplay-history \
 - `syncplay/server.py` (a small modification of the upstream server) persists
   rooms and permanent rooms in the same backend DB, and publishes a heartbeat
   + `room_status` snapshot every 30 s.
-- `syncplay/admin.py` is the FastAPI admin web app (port 12347, loopback only).
+- `syncplay/admin.py` is the FastAPI admin web app (port 12347, published on
+  the host's loopback only).
 - `entrypoint.sh` starts and supervises the server, the proxy, and the admin
   app in the same container.
 - The Syncplay client code is not modified.
@@ -202,9 +203,21 @@ docker run -d --name syncplay-history \
 ## Admin web app
 
 The admin app exposes health, room management, watch history, and users over
-HTTP on port **12347**, bound to `127.0.0.1` — expose it through the same
-same-host reverse proxy as the main service (a Caddy `handle`/location block or
-nginx `location /` proxying to `127.0.0.1:12347`).
+HTTP on port **12347**. Inside the container it binds `0.0.0.0` (Docker port
+mapping only reaches the container network IP); the compose mapping
+`127.0.0.1:12347:12347` publishes it on the host's loopback only — it is not
+reachable from the network, only from the host itself.
+
+Reach it one of these ways:
+
+- **Same host** (e.g. SSH'd into it): `http://127.0.0.1:12347/`
+- **Remote, no network exposure** (recommended while the admin is not
+  public-ready): an SSH tunnel from your machine,
+  `ssh -L 12347:127.0.0.1:12347 <host>` (add it as a `LocalForward` line in
+  `~/.ssh/config`), then open `http://127.0.0.1:12347/` locally
+- **Same-host reverse proxy** (when you do want a standing endpoint): a
+  Caddy `handle`/location block or nginx `location /` proxying to
+  `127.0.0.1:12347`. If you expose it this way, set `ADMIN_TOKEN` (see below).
 
 - **No login required by default.** Set `ADMIN_TOKEN` (in `.secrets.env`) to
   require an `X-Admin-Token` header (or `?token=` query param) on all `/api/*`
