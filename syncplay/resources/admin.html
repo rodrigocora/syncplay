@@ -98,6 +98,15 @@
   .error { color: var(--watermelon-strong); font-size: .85rem; }
   .note { font-size: .8rem; color: var(--ink-muted); }
   .flex { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .pw { cursor: default; }
+  .pw.revealed { color: var(--garden-strong); font-weight: 600; }
+  .eye { padding: .15rem .4rem; text-transform: none; font-size: .75rem; }
+  .settings-panel {
+    background: var(--panel); border: 1px solid var(--hairline); border-radius: 2px;
+    padding: .75rem 1rem; max-width: 44rem; display: grid; gap: .6rem;
+  }
+  .settings-panel label.row { display: flex; gap: .5rem; align-items: baseline; font-size: .8rem; }
+  .settings-panel textarea { width: 100%; }
 </style>
 </head>
 <body>
@@ -105,7 +114,7 @@
   <div class="brand-mark"></div>
   <div>
     <h1>syncplay-history admin</h1>
-    <p class="note">Changes apply on the next server restart. <span id="tokenNote"></span></p>
+    <p class="note">Room changes apply on the next server restart; settings and MOTD apply on the next client connect. <span id="tokenNote"></span></p>
   </div>
 </header>
 
@@ -117,6 +126,20 @@
   <div class="card"><div class="label">DB</div><div class="value" id="hDb">–</div></div>
   <div class="card"><div class="label">Active rooms</div><div class="value" id="hRooms">–</div></div>
   <div class="card"><div class="label">Users</div><div class="value" id="hUsers">–</div></div>
+</div>
+
+<h2>Settings</h2>
+<div class="settings-panel">
+  <label class="row"><input type="checkbox" id="setNoticeEnabled"> Show persistent-rooms notice to clients</label>
+  <textarea id="setNoticeText" rows="4" placeholder="Persistent-rooms notice text (clients see this on connect)"></textarea>
+  <label class="row">Global MOTD
+    <input type="text" id="setMotd" placeholder="optional banner, $room $username $userIp $version placeholders" size="60">
+  </label>
+  <div class="flex">
+    <button id="btnSaveSettings">Save settings</button>
+    <span class="muted">applies on next client connect</span>
+    <span class="error" id="settingsError"></span>
+  </div>
 </div>
 
 <h2>Rooms</h2>
@@ -160,13 +183,26 @@
 
 <dialog id="passwordDialog">
   <h3 id="passwordTitle">Set password</h3>
-  <p class="note">Controlled room password (format <code>XX-000-000</code>). Requires a stable <code>SYNCPLAY_SALT</code>; the server derives the <code>+room:hash</code> name when a client joins.</p>
+  <p class="note">Controlled room password (format <code>XX-000-000</code>). Gates <b>who can control</b> playback — anyone can still join and watch. Derived name clients must use to authenticate:</p>
+  <div class="flex"><code id="controlledRoom" class="muted">–</code> <button data-act="copyHash" class="eye" title="copy">copy</button></div>
   <input type="text" id="passwordText" placeholder="AB-123-456" size="16">
   <div class="flex">
     <button id="btnSavePassword">Save</button>
     <button id="btnCancelPassword">Cancel</button>
     <button id="btnDeletePassword" class="danger">Remove</button>
     <span class="error" id="passwordError"></span>
+  </div>
+</dialog>
+
+<dialog id="motdDialog">
+  <h3 id="motdTitle">Room MOTD</h3>
+  <p class="note">Shown to clients of this room on connect. <code>$room</code> <code>$username</code> <code>$userIp</code> <code>$version</code> placeholders allowed. Empty = fall back to global MOTD.</p>
+  <textarea id="motdText" rows="6" cols="60" placeholder="per-room MOTD"></textarea>
+  <div class="flex">
+    <button id="btnSaveMotd">Save</button>
+    <button id="btnResetMotd">Reset to default</button>
+    <button id="btnCancelMotd">Cancel</button>
+    <span class="error" id="motdError"></span>
   </div>
 </dialog>
 
@@ -235,12 +271,13 @@ async function loadRooms() {
       <td>${r.playing ? "yes" : "–"}</td>
       <td>${r.position != null ? Math.round(r.position) + "s" : "–"}</td>
       <td>${r.playlist_size || (r.playlist && r.playlist.length) || 0}</td>
-      <td>${passwords[r.name] ? esc(passwords[r.name]) : "–"}</td>
+      <td>${passwords[r.name] ? `<span class="pw" data-name="${esc(r.name)}" data-pw="${esc(passwords[r.name])}">••• ••• •••</span> <button data-act="eye" data-name="${esc(r.name)}" class="eye" title="reveal password">👁</button>` : "–"}</td>
       <td class="row-actions">
         <button data-act="playlist" data-name="${esc(r.name)}">Playlist</button>
         <button data-act="password" data-name="${esc(r.name)}">Password</button>
+        <button data-act="motd" data-name="${esc(r.name)}">Motd</button>
         <button data-act="perm" data-name="${esc(r.name)}">${r.permanent ? "Un-perm" : "Make perm"}</button>
-        <button data-act="del" data-name="${esc(r.name)}" class="danger" ${r.permanent ? "disabled" : ""}>Delete</button>
+        <button data-act="del" data-name="${esc(r.name)}" class="danger">Delete</button>
       </td>
     </tr>`).join("");
     tbody.querySelectorAll("button").forEach(btn => btn.addEventListener("click", onRoomAction));
@@ -253,14 +290,41 @@ let currentRoom = null;
 function onRoomAction(e) {
   const act = e.target.dataset.act, name = e.target.dataset.name;
   if (act === "del") {
-    if (!confirm("Delete room " + name + "?")) return;
-    api("/api/rooms/" + encodeURIComponent(name), { method: "DELETE" })
+    const perm = e.target.closest("tr").querySelector("td:nth-child(3)").textContent.trim() === "yes";
+    const msg = perm
+      ? "Delete room " + name + "? It is PERMANENT — this also removes it from the permanent list."
+      : "Delete room " + name + "?";
+    if (!confirm(msg)) return;
+    api("/api/rooms/" + encodeURIComponent(name), {
+      method: "DELETE", body: JSON.stringify({ confirm_permanent: perm })
+    })
       .then(() => { document.getElementById("roomError").textContent = ""; loadRooms(); })
       .catch(err => { document.getElementById("roomError").textContent = err.message; });
+  } else if (act === "eye") {
+    const span = e.target.closest("td").querySelector(".pw");
+    if (!span) return;
+    const revealed = span.classList.toggle("revealed");
+    span.textContent = revealed ? span.dataset.pw : "••• ••• •••";
   } else if (act === "perm") {
     api("/api/rooms/" + encodeURIComponent(name) + "/permanent", {
       method: "POST", body: JSON.stringify({ permanent: e.target.textContent.startsWith("Make") })
     }).then(() => loadRooms()).catch(err => { document.getElementById("roomError").textContent = err.message; });
+  } else if (act === "motd") {
+    currentRoom = name;
+    api("/api/rooms/" + encodeURIComponent(name) + "/motd")
+      .then(r => {
+        document.getElementById("motdTitle").textContent = "Room MOTD — " + name;
+        document.getElementById("motdText").value = r.motd || "";
+        document.getElementById("motdError").textContent = "";
+        document.getElementById("motdDialog").showModal();
+      })
+      .catch(() => {
+        // no per-room MOTD set yet
+        document.getElementById("motdTitle").textContent = "Room MOTD — " + name;
+        document.getElementById("motdText").value = "";
+        document.getElementById("motdError").textContent = "";
+        document.getElementById("motdDialog").showModal();
+      });
   } else if (act === "playlist") {
     currentRoom = name;
     api("/api/rooms/" + encodeURIComponent(name))
@@ -277,6 +341,7 @@ function onRoomAction(e) {
       .then(r => {
         document.getElementById("passwordTitle").textContent = "Set password — " + name;
         document.getElementById("passwordText").value = r.password || "";
+        document.getElementById("controlledRoom").textContent = r.controlled_room || "(set SYNCPLAY_SALT to derive)";
         document.getElementById("passwordError").textContent = "";
         document.getElementById("btnDeletePassword").style.display = r.password ? "" : "none";
         document.getElementById("passwordDialog").showModal();
@@ -285,6 +350,7 @@ function onRoomAction(e) {
         // no password set yet
         document.getElementById("passwordTitle").textContent = "Set password — " + name;
         document.getElementById("passwordText").value = "";
+        document.getElementById("controlledRoom").textContent = "(set a password + SYNCPLAY_SALT to derive)";
         document.getElementById("passwordError").textContent = "";
         document.getElementById("btnDeletePassword").style.display = "none";
         document.getElementById("passwordDialog").showModal();
@@ -309,8 +375,15 @@ document.getElementById("btnSavePassword").addEventListener("click", () => {
   }
   api("/api/rooms/" + encodeURIComponent(currentRoom) + "/password", {
     method: "POST", body: JSON.stringify({ password })
-  }).then(() => { document.getElementById("passwordDialog").close(); loadRooms(); })
+  }).then(r => {
+    document.getElementById("controlledRoom").textContent = r.controlled_room || "(set SYNCPLAY_SALT to derive)";
+    document.getElementById("passwordDialog").close(); loadRooms();
+  })
     .catch(err => { document.getElementById("passwordError").textContent = err.message; });
+});
+document.querySelector('[data-act="copyHash"]').addEventListener("click", () => {
+  const text = document.getElementById("controlledRoom").textContent;
+  navigator.clipboard && navigator.clipboard.writeText(text).catch(() => {});
 });
 document.getElementById("btnCancelPassword").addEventListener("click", () => document.getElementById("passwordDialog").close());
 document.getElementById("btnDeletePassword").addEventListener("click", () => {
@@ -318,6 +391,41 @@ document.getElementById("btnDeletePassword").addEventListener("click", () => {
     .then(() => { document.getElementById("passwordDialog").close(); loadRooms(); })
     .catch(err => { document.getElementById("passwordError").textContent = err.message; });
 });
+
+async function loadSettings() {
+  try {
+    const s = await api("/api/settings");
+    document.getElementById("setNoticeEnabled").checked = !!s.persistent_notice_enabled;
+    document.getElementById("setNoticeText").value = s.persistent_notice || "";
+    document.getElementById("setMotd").value = s.motd || "";
+  } catch (e) { document.getElementById("settingsError").textContent = e.message; }
+}
+document.getElementById("btnSaveSettings").addEventListener("click", async () => {
+  try {
+    await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        persistent_notice_enabled: document.getElementById("setNoticeEnabled").checked,
+        persistent_notice: document.getElementById("setNoticeText").value,
+        motd: document.getElementById("setMotd").value
+      })
+    });
+    document.getElementById("settingsError").textContent = "saved (applies on next client connect)";
+  } catch (e) { document.getElementById("settingsError").textContent = e.message; }
+});
+
+document.getElementById("btnSaveMotd").addEventListener("click", () => {
+  api("/api/rooms/" + encodeURIComponent(currentRoom) + "/motd", {
+    method: "PUT", body: JSON.stringify({ motd: document.getElementById("motdText").value })
+  }).then(() => { document.getElementById("motdDialog").close(); })
+    .catch(err => { document.getElementById("motdError").textContent = err.message; });
+});
+document.getElementById("btnResetMotd").addEventListener("click", () => {
+  api("/api/rooms/" + encodeURIComponent(currentRoom) + "/motd", { method: "DELETE" })
+    .then(() => { document.getElementById("motdDialog").close(); })
+    .catch(err => { document.getElementById("motdError").textContent = err.message; });
+});
+document.getElementById("btnCancelMotd").addEventListener("click", () => document.getElementById("motdDialog").close());
 
 document.getElementById("btnCreateRoom").addEventListener("click", () => {
   const name = document.getElementById("newRoomName").value.trim();

@@ -110,7 +110,11 @@ class SyncFactory(Factory):
         features["isolateRooms"] = self.isolateRooms
         features["readiness"] = not self.disableReady
         features["managedRooms"] = True
-        features["persistentRooms"] = self.roomsDbFile is not None
+        # The persistent-rooms notice is delivered through the MOTD (so the
+        # admin can edit it). Advertising persistentRooms would additionally
+        # make clients prepend their own hardcoded copy; we suppress the flag
+        # for that reason (nothing else in the protocol uses it).
+        features["persistentRooms"] = False
         features["chat"] = not self.disableChat
         features["maxChatMessageLength"] = self.maxChatMessageLength
         features["maxUsernameLength"] = self.maxUsernameLength
@@ -125,21 +129,46 @@ class SyncFactory(Factory):
         if constants.WARN_OLD_CLIENTS:
             if not meetsMinVersion(clientVersion, constants.RECENT_CLIENT_THRESHOLD):
                 oldClient = True
-        if self._motdFilePath and os.path.isfile(self._motdFilePath):
-            tmpl = codecs.open(self._motdFilePath, "r", "utf-8-sig").read()
-            args = dict(version=syncplay.version, userIp=userIp, username=username, room=room)
+        args = dict(version=syncplay.version, userIp=userIp, username=username, room=room)
+        tmpl = self._resolve_motd_template(room)
+        if tmpl is not None:
             try:
                 motd = Template(tmpl).substitute(args)
-                if oldClient:
-                    motdwarning = getMessage("new-syncplay-available-motd-message").format(clientVersion)
-                    motd = "{}\n{}".format(motdwarning, motd)
-                return motd if len(motd) < constants.SERVER_MAX_TEMPLATE_LENGTH else getMessage("server-messed-up-motd-too-long").format(constants.SERVER_MAX_TEMPLATE_LENGTH, len(motd))
             except ValueError:
                 return getMessage("server-messed-up-motd-unescaped-placeholders")
+            if oldClient:
+                motd = "{}\n{}".format(getMessage("new-syncplay-available-motd-message").format(clientVersion), motd)
+            return motd if len(motd) < constants.SERVER_MAX_TEMPLATE_LENGTH else getMessage("server-messed-up-motd-too-long").format(constants.SERVER_MAX_TEMPLATE_LENGTH, len(motd))
         elif oldClient:
             return getMessage("new-syncplay-available-motd-message").format(clientVersion)
         else:
             return ""
+
+    def _resolve_motd_template(self, room):
+        """Per-room MOTD override, then global MOTD (both in DB), then the
+        legacy --motd-file. Returns the raw template text or None."""
+        if self._backendStore is not None:
+            roomName = room.getName() if room is not None else None
+            if roomName:
+                room_motd = self._backendStore.get_room_motd(roomName)
+                if room_motd:
+                    return room_motd
+            global_motd = self._backendStore.get_server_info("motd")
+            if global_motd:
+                return global_motd
+        if self._motdFilePath and os.path.isfile(self._motdFilePath):
+            return codecs.open(self._motdFilePath, "r", "utf-8-sig").read()
+        return None
+
+    def getPersistentNotice(self):
+        """Text to prepend to the MOTD about persistent rooms, or "" to
+        suppress. Editable from the admin via server_info; falls back to the
+        stock message."""
+        if self._backendStore is None:
+            return getMessage("persistent-rooms-notice")
+        if self._backendStore.get_server_info("persistent_notice_enabled") == "0":
+            return ""
+        return self._backendStore.get_server_info("persistent_notice") or getMessage("persistent-rooms-notice")
 
     def addWatcher(self, watcherProtocol, username, roomName):
         roomName = truncateText(roomName, constants.MAX_ROOM_NAME_LENGTH)

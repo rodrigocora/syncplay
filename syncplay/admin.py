@@ -22,7 +22,7 @@ import time
 from contextlib import asynccontextmanager
 
 import db
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -195,11 +195,19 @@ def get_room(name: str):
 
 
 @app.delete("/api/rooms/{name}", dependencies=[Depends(require_token)])
-def delete_room(name: str):
+def delete_room(name: str, payload: dict = Body(default=None)):  # noqa: B008
     store = get_store()
-    if store.is_permanent(name):
-        raise HTTPException(status_code=409, detail="permanent rooms cannot be deleted")
+    permanent = store.is_permanent(name)
+    if permanent and not (payload and payload.get("confirm_permanent")):
+        raise HTTPException(
+            status_code=409,
+            detail="permanent room; resend with confirm_permanent=true",
+        )
     store.delete_room(name)
+    store.delete_room_motd(name)
+    store.delete_room_password(name)
+    if permanent:
+        store.unset_permanent(name)
     return {"ok": True}
 
 
@@ -227,6 +235,75 @@ def set_room_playlist(name: str, payload: dict):
     # keep it persistent by storing a marker
     store.save_room(name, "\n".join(playlist), index if index is not None else 0, 0.0, int(time.time()))
     return {"ok": True, "name": name, "playlist": playlist, "index": index}
+
+
+# ---------------------------------------------------------------------------
+# Server settings (MOTD, persistent-rooms notice) — stored in server_info
+# ---------------------------------------------------------------------------
+
+
+def _settings_payload(store):
+    return {
+        "motd": store.get_server_info("motd"),
+        "persistent_notice": store.get_server_info("persistent_notice"),
+        "persistent_notice_enabled": store.get_server_info("persistent_notice_enabled") != "0",
+    }
+
+
+@app.get("/api/settings", dependencies=[Depends(require_token)])
+def get_settings():
+    return _settings_payload(get_store())
+
+
+@app.put("/api/settings", dependencies=[Depends(require_token)])
+def put_settings(payload: dict):
+    store = get_store()
+    for key in ("motd", "persistent_notice"):
+        if key in payload:
+            value = str(payload[key] or "")
+            store.set_server_info(key, value)
+    if "persistent_notice_enabled" in payload:
+        store.set_server_info("persistent_notice_enabled", "1" if payload["persistent_notice_enabled"] else "0")
+    return _settings_payload(store)
+
+
+# ---------------------------------------------------------------------------
+# Per-room MOTD
+# ---------------------------------------------------------------------------
+
+
+def _room_motd_payload(store, name):
+    motd = store.get_room_motd(name)
+    if motd is None:
+        return None
+    return {"room": name, "motd": motd}
+
+
+@app.get("/api/rooms/{name}/motd", dependencies=[Depends(require_token)])
+def get_room_motd(name: str):
+    store = get_store()
+    if not _room_exists(store, name):
+        raise HTTPException(status_code=404, detail="room not found")
+    payload = _room_motd_payload(store, name)
+    if not payload:
+        raise HTTPException(status_code=404, detail="no per-room MOTD set")
+    return payload
+
+
+@app.put("/api/rooms/{name}/motd", dependencies=[Depends(require_token)])
+def put_room_motd(name: str, payload: dict):
+    store = get_store()
+    if not _room_exists(store, name):
+        raise HTTPException(status_code=404, detail="room not found")
+    store.set_room_motd(name, str(payload.get("motd") or ""), int(time.time()))
+    return _room_motd_payload(store, name)
+
+
+@app.delete("/api/rooms/{name}/motd", dependencies=[Depends(require_token)])
+def delete_room_motd(name: str):
+    store = get_store()
+    store.delete_room_motd(name)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

@@ -129,7 +129,8 @@ def test_schema_creates_all_tables():
     tables = {r[0] for r in s.query(
         "select name from sqlite_master where type='table'")}
     assert {"users", "watch_history", "persistent_rooms",
-            "permanent_rooms", "room_passwords", "server_info", "room_status"} <= tables
+            "permanent_rooms", "room_passwords", "server_info", "room_status",
+            "room_motds"} <= tables
 
 
 def test_schema_idempotent():
@@ -267,6 +268,16 @@ def test_room_password_roundtrip():
     assert s.list_room_passwords() == {"room": "CD-789-012"}
     s.delete_room_password("room")
     assert s.get_room_password("room") is None
+
+
+def test_room_motd_roundtrip():
+    s = _store()
+    assert s.get_room_motd("room") is None
+    s.set_room_motd("room", "hello $room", 100)
+    s.set_room_motd("room", "updated", 200)  # upsert
+    assert s.get_room_motd("room") == "updated"
+    s.delete_room_motd("room")
+    assert s.get_room_motd("room") is None
 
 
 def test_server_info():

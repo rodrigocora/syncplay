@@ -590,9 +590,14 @@ class SyncServerProtocol(JSONCommandProtocol):
         hello["realversion"] = syncplay.version
         hello["features"] = self._factory.getFeatures()
         hello["motd"] = self._factory.getMotd(userIp, username, room, clientVersion)
-        if self.persistentRoomWarning(clientFeatures=self._features, serverFeatures=hello["features"]):
+        # The persistent-rooms notice is injected here (server-side, editable
+        # from the admin) rather than via the persistentRooms feature flag:
+        # advertising that flag makes *clients* prepend their own hardcoded
+        # copy of the notice, which we cannot edit.
+        notice = self._factory.getPersistentNotice()
+        if notice:
             span = "\n\n" if hello["motd"] else ""
-            hello["motd"] = getMessage("persistent-rooms-notice") + span + hello["motd"]
+            hello["motd"] = notice + span + hello["motd"]
         self.sendMessage({"Hello": hello})
 
     @requireLogged

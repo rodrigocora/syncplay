@@ -110,6 +110,23 @@ def test_delete_permanent_room_409(client):
     assert r.status_code == 409
 
 
+def test_delete_permanent_room_with_confirm(client):
+    client.post("/api/rooms", json={"name": "permroom", "permanent": True})
+    r = client.request("DELETE", "/api/rooms/permroom", json={"confirm_permanent": True})
+    assert r.status_code == 200
+    assert "permroom" not in {room["name"] for room in client.get("/api/rooms").json()["rooms"]}
+
+
+def test_delete_room_clears_related(client):
+    # seed related rows that must be swept on delete
+    client.post("/api/rooms/existing/password", json={"password": "AB-123-456"})
+    client.put("/api/rooms/existing/motd", json={"motd": "hi"})
+    r = client.delete("/api/rooms/existing")
+    assert r.status_code == 200
+    assert client.get("/api/rooms/existing/password").status_code == 404
+    assert client.get("/api/rooms/existing/motd").status_code == 404
+
+
 def test_set_permanent_toggle(client):
     r = client.post("/api/rooms/existing/permanent", json={"permanent": True})
     assert r.status_code == 200
@@ -233,6 +250,77 @@ def test_users(client):
     users = r.json()["users"]
     assert users[0]["username"] == "alice"
     assert users[0]["first_seen"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Settings (MOTD / persistent-rooms notice)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_default(client):
+    r = client.get("/api/settings")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["motd"] is None
+    assert j["persistent_notice"] is None
+    assert j["persistent_notice_enabled"] is True  # default: on
+
+
+def test_settings_put_get_roundtrip(client):
+    r = client.put("/api/settings", json={
+        "motd": "Welcome to $room",
+        "persistent_notice": "Custom notice text",
+        "persistent_notice_enabled": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["persistent_notice_enabled"] is False
+    j = client.get("/api/settings").json()
+    assert j["motd"] == "Welcome to $room"
+    assert j["persistent_notice"] == "Custom notice text"
+    assert j["persistent_notice_enabled"] is False
+    # re-enable
+    client.put("/api/settings", json={"persistent_notice_enabled": True})
+    assert client.get("/api/settings").json()["persistent_notice_enabled"] is True
+
+
+def test_settings_partial_update(client):
+    client.put("/api/settings", json={"motd": "only motd"})
+    j = client.get("/api/settings").json()
+    assert j["motd"] == "only motd"
+    assert j["persistent_notice"] is None  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Per-room MOTD
+# ---------------------------------------------------------------------------
+
+
+def test_room_motd_roundtrip(client):
+    r = client.put("/api/rooms/existing/motd", json={"motd": "Watch parties here"})
+    assert r.status_code == 200
+    assert r.json()["motd"] == "Watch parties here"
+    r = client.get("/api/rooms/existing/motd")
+    assert r.status_code == 200
+    assert r.json()["room"] == "existing"
+    # upsert
+    client.put("/api/rooms/existing/motd", json={"motd": "updated"})
+    assert client.get("/api/rooms/existing/motd").json()["motd"] == "updated"
+
+
+def test_room_motd_delete(client):
+    client.put("/api/rooms/existing/motd", json={"motd": "x"})
+    r = client.delete("/api/rooms/existing/motd")
+    assert r.status_code == 200
+    assert client.get("/api/rooms/existing/motd").status_code == 404
+
+
+def test_room_motd_unknown_room_404(client):
+    assert client.get("/api/rooms/ghost/motd").status_code == 404
+    assert client.put("/api/rooms/ghost/motd", json={"motd": "x"}).status_code == 404
+
+
+def test_room_motd_empty_404(client):
+    assert client.get("/api/rooms/existing/motd").status_code == 404
 
 
 # ---------------------------------------------------------------------------

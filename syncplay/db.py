@@ -382,6 +382,23 @@ class BackendStore:
         return {room: password for room, password, _ in
                 self.query("select room, password, updated_at from room_passwords order by room")}
 
+    # -- per-room MOTD ------------------------------------------------------
+
+    def set_room_motd(self, room, motd, now):
+        self._exec(
+            "insert into room_motds (name, motd, updated_at) values (?, ?, ?) "
+            "on conflict(name) do update set motd = excluded.motd, updated_at = excluded.updated_at"
+            .replace("?", self.ph),
+            (room, motd, now),
+        )
+
+    def get_room_motd(self, room):
+        rows = self.query("select motd from room_motds where name = " + self.ph, (room,))
+        return rows[0][0] if rows else None
+
+    def delete_room_motd(self, room):
+        self._exec("delete from room_motds where name = " + self.ph, (room,))
+
     # -- server health ------------------------------------------------------
 
     def set_server_info(self, key, value):
@@ -455,6 +472,11 @@ class BackendStore:
         " updated_at integer"
         ")",
         "create table if not exists server_info (key text primary key, value text)",
+        "create table if not exists room_motds ("
+        " name text primary key,"
+        " motd text,"
+        " updated_at integer"
+        ")",
         "create table if not exists room_status ("
         " room text primary key,"
         " watchers integer,"
@@ -494,6 +516,11 @@ class BackendStore:
         " updated_at bigint"
         ")",
         "create table if not exists server_info (key text primary key, value text)",
+        "create table if not exists room_motds ("
+        " name text primary key,"
+        " motd text,"
+        " updated_at bigint"
+        ")",
         "create table if not exists room_status ("
         " room text primary key,"
         " watchers integer,"
