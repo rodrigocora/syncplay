@@ -323,3 +323,20 @@ def test_postgres_store_roundtrip():
     assert s.get_server_info("version") == "pg"
     assert s.list_room_status()
     s.close()
+
+
+@pytest.mark.skipif(not PG_DSN, reason="set SYNCPLAY_TEST_PG_DSN to run")
+def test_postgres_reconnects_after_close():
+    """A dropped Postgres connection must not poison later calls."""
+    s = db.BackendStore(PG_DSN)
+    assert s.dialect == "postgres"
+    s.upsert_user("pgreconnect", 1)
+    # simulate Postgres dropping the connection (idle timeout / restart)
+    # (psycopg2 .closed is an int: 0 open, 1 closed, 2 closed with error)
+    s._conn.close()
+    assert s._conn.closed
+    # the next call must transparently reconnect and succeed
+    s.upsert_user("pgreconnect", 2)
+    rows = s.query("select last_seen from users where username = 'pgreconnect'")
+    assert rows and rows[0][0] == 2
+    s.close()

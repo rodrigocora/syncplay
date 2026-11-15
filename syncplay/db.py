@@ -121,7 +121,7 @@ class BackendStore:
         scheme, params = parse_dsn(dsn)
         self.dsn = dsn
         self.dialect = scheme
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         if scheme == "sqlite":
             self.ph = "?"
             self._conn = sqlite3.connect(_db_path(params), check_same_thread=False, timeout=30)
@@ -132,12 +132,17 @@ class BackendStore:
             import psycopg2
 
             self._psycopg2 = psycopg2
+            self._conn_host = params["host"]
+            self._conn_port = params["port"]
+            self._conn_user = params["user"]
+            self._conn_password = params["password"]
+            self._conn_dbname = params["dbname"]
             self._conn = psycopg2.connect(
-                host=params["host"],
-                port=params["port"],
-                user=params["user"],
-                password=params["password"],
-                dbname=params["dbname"],
+                host=self._conn_host,
+                port=self._conn_port,
+                user=self._conn_user,
+                password=self._conn_password,
+                dbname=self._conn_dbname,
             )
             # autocommit so a single failed statement cannot poison later writes
             self._conn.autocommit = True
@@ -156,8 +161,37 @@ class BackendStore:
             finally:
                 cur.close()
 
+    def _ensure_conn(self):
+        """Reconnect if Postgres dropped the connection (idle timeout, restart).
+
+        The store keeps one long-lived connection; without this, a closed
+        connection poisons every later call with 'connection already closed'.
+        Callers already hold self._lock; do not acquire it here.
+        """
+        if self.dialect != "postgres":
+            return
+        try:
+            if self._conn.closed:
+                raise self._psycopg2.InterfaceError("connection closed")
+            self._conn.cursor().execute("select 1")
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = self._psycopg2.connect(
+                host=self._conn_host,
+                port=self._conn_port,
+                user=self._conn_user,
+                password=self._conn_password,
+                dbname=self._conn_dbname,
+            )
+            self._conn.autocommit = True
+            self._create_schema()
+
     def _exec(self, query, params=()):
         with self._lock:
+            self._ensure_conn()
             cur = self._conn.cursor()
             try:
                 cur.execute(query, params)
@@ -173,6 +207,7 @@ class BackendStore:
     def query(self, sql, params=()):
         """Return all rows for a SELECT (used by tests/admin/simulator)."""
         with self._lock:
+            self._ensure_conn()
             cur = self._conn.cursor()
             try:
                 cur.execute(sql, params)
