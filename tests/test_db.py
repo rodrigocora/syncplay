@@ -333,6 +333,11 @@ def test_postgres_store_roundtrip():
     assert "pgperm" in s.list_permanent()
     assert s.get_server_info("version") == "pg"
     assert s.list_room_status()
+    # the ON CONFLICT DO UPDATE SET must actually write (regression: bare
+    # column names like `size = coalesce(excluded.size, size)` are ambiguous
+    # in Postgres and silently fail because _exec swallows errors)
+    rows = s.query_history(room="pgroom")
+    assert rows and rows[0][2] == 10 and rows[0][3] == 5.0, rows
     s.close()
 
 

@@ -275,10 +275,10 @@ class BackendStore:
             "insert into watch_history (room, file, size, watched, percentage, duration, started_at, last_seen) "
             "values (?, ?, ?, ?, ?, ?, ?, ?) "
             "on conflict(room, file) do update set "
-            " size = coalesce(excluded.size, size),"
-            f" watched = {mx}(coalesce(watched, 0), coalesce(excluded.watched, 0)),"
-            " percentage = coalesce(excluded.percentage, percentage),"
-            " duration = coalesce(excluded.duration, duration),"
+            " size = coalesce(excluded.size, watch_history.size),"
+            f" watched = {mx}(coalesce(watch_history.watched, 0), coalesce(excluded.watched, 0)),"
+            " percentage = coalesce(excluded.percentage, watch_history.percentage),"
+            " duration = coalesce(excluded.duration, watch_history.duration),"
             " stopped_at = 0,"
             " last_seen = excluded.last_seen".replace("?", self.ph),
             (room, file, size, watched, percentage, duration, now, now),
@@ -293,7 +293,7 @@ class BackendStore:
             "insert into watch_history (room, file, watched, duration, stopped_at, started_at, last_seen) "
             "values (?, ?, ?, 0, ?, ?, ?) "
             "on conflict(room, file) do update set "
-            f" watched = {mx}(coalesce(watched, 0), coalesce(excluded.watched, 0)),"
+            f" watched = {mx}(coalesce(watch_history.watched, 0), coalesce(excluded.watched, 0)),"
             " stopped_at = excluded.stopped_at,"
             " last_seen = excluded.last_seen".replace("?", self.ph),
             (room, file, watched, now, now, now),
