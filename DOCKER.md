@@ -81,9 +81,39 @@ The variable reference lives in the [README](README.md#quick-start-docker-compos
 ### Behind a reverse proxy
 
 The proxy speaks raw TCP, not HTTP — the reverse proxy must forward at the
-TCP/stream layer (Caddy `tcp` site block, nginx `stream`, etc.). `compose.yaml`
-binds the port to `127.0.0.1`, so only a same-host proxy can reach the server;
-point it at `127.0.0.1:12346`.
+TCP/stream layer. Vanilla Caddy **cannot** do this: a `tcp :8995 { reverse_proxy
+... }` block is parsed as an *HTTP* site for the hostname "tcp" (Caddy then
+tries to get a TLS certificate for "tcp" and drops the raw connection). Use one
+of:
+
+- **Caddy + caddy-l4** (recommended; what this deployment uses):
+  ```caddyfile
+  {
+      layer4 {
+          tcp/0.0.0.0:8995 {
+              route {
+                  proxy syncplay-history:12346
+              }
+          }
+      }
+  }
+  ```
+  Requires building Caddy with the plugin (`xcaddy build --with
+  github.com/mholt/caddy-l4`) — see `caddy-stack/Dockerfile` in the deployment
+  notes, or the README's proxy example. Publish the raw port (e.g. `8995:8995`)
+  in the proxy's compose `ports:` **and** open it in the host/cloud firewall.
+- **nginx** with the `stream` module:
+  ```nginx
+  stream {
+      server {
+          listen 8995;
+          proxy_pass 127.0.0.1:12346;
+      }
+  }
+  ```
+
+`compose.yaml` binds the port to `127.0.0.1`, so only a same-host proxy can
+reach the server; point it at `127.0.0.1:12346`.
 
 The service also attaches to the external `proxy-tier` network (create it on
 the host first, e.g. `docker network create proxy-tier`). A containerized
