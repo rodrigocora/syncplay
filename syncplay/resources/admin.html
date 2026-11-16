@@ -63,6 +63,7 @@
     text-transform: uppercase; letter-spacing: .06em; font-size: .7rem;
   }
   tbody tr:hover { background: var(--surface); }
+  td.num { text-align: right; white-space: nowrap; }
   .muted { color: var(--ink-muted); }
   input[type=text], textarea, select {
     font-family: var(--mono); font-size: .85rem; color: var(--ink);
@@ -158,10 +159,21 @@
 <div class="flex">
   <input type="text" id="histQ" placeholder="filter room/file…" size="30">
   <button id="btnHistFilter">Filter</button>
+  <label class="note">Refresh:
+    <select id="histRefresh">
+      <option value="5">5s</option>
+      <option value="10">10s</option>
+      <option value="15">15s</option>
+      <option value="20">20s</option>
+      <option value="30" selected>30s</option>
+      <option value="45">45s</option>
+      <option value="60">60s</option>
+    </select>
+  </label>
   <span class="muted" id="histCount"></span>
 </div>
 <table id="histTable">
-  <thead><tr><th>Room</th><th>File</th><th>Size</th><th>Watched (s)</th><th>%</th><th>Duration</th><th>Last seen</th></tr></thead>
+  <thead><tr><th>Room</th><th>File</th><th>Size</th><th>Watched (mm:ss)</th><th>%</th><th>Duration (mm:ss)</th><th>Last seen</th></tr></thead>
   <tbody></tbody>
 </table>
 
@@ -231,6 +243,30 @@ function fmtDur(s) {
   if (s == null) return "–";
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
   return m + "m" + sec + "s";
+}
+// Human-readable size starting at MB (binary units); >=1000 MB shown as GB.
+function fmtSize(bytes) {
+  if (bytes == null) return "–";
+  const mb = Number(bytes) / (1024 * 1024);
+  if (!isFinite(mb)) return "–";
+  if (mb >= 1000) return (mb / 1024).toFixed(1) + " GB";
+  return mb.toFixed(1) + " MB";
+}
+// mm:ss with unbounded minutes (no hours). Carry-safe: 59.6s -> 1:00.
+function fmtMS(sec) {
+  if (sec == null) return "–";
+  let t = Math.round(Number(sec));
+  if (!isFinite(t) || t < 0) return "–";
+  const m = Math.floor(t / 60), s = t % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+// Zero-padded DD/MM/YYYY, HH:MM:SS so the column stays aligned (monospace).
+function fmtSeen(ts) {
+  if (!ts) return "–";
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear()
+    + ", " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
 }
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -436,24 +472,41 @@ document.getElementById("btnCreateRoom").addEventListener("click", () => {
     .catch(err => { document.getElementById("roomError").textContent = err.message; });
 });
 
+let histLoading = false;
 async function loadHistory() {
+  // Skip overlapping ticks so a slow response can't overwrite a newer one.
+  if (histLoading) return;
+  histLoading = true;
   const q = document.getElementById("histQ").value.trim();
   const url = q ? "/api/history?q=" + encodeURIComponent(q) : "/api/history";
   const tbody = document.querySelector("#histTable tbody");
   try {
     const { rows } = await api(url);
-    document.getElementById("histCount").textContent = rows.length + " rows";
+    const now = new Date();
+    const p = n => String(n).padStart(2, "0");
+    document.getElementById("histCount").textContent =
+      rows.length + " rows · updated " + p(now.getHours()) + ":" + p(now.getMinutes()) + ":" + p(now.getSeconds());
     tbody.innerHTML = rows.map(r => `<tr>
       <td>${esc(r.room)}</td><td>${esc(r.file)}</td>
-      <td>${r.size ?? "–"}</td><td>${r.watched != null ? Math.round(r.watched) : "–"}</td>
-      <td>${r.percentage != null ? r.percentage.toFixed(1) + "%" : "–"}</td>
-      <td>${fmtDur(r.duration)}</td><td>${fmtTime(r.last_seen)}</td>
+      <td class="num">${fmtSize(r.size)}</td><td class="num">${fmtMS(r.watched)}</td>
+      <td class="num">${r.percentage != null ? r.percentage.toFixed(1) + "%" : "–"}</td>
+      <td class="num">${fmtMS(r.duration)}</td><td class="num">${fmtSeen(r.last_seen)}</td>
     </tr>`).join("");
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="7" class="error">${esc(e.message)}</td></tr>`;
+  } finally {
+    histLoading = false;
   }
 }
 document.getElementById("btnHistFilter").addEventListener("click", loadHistory);
+// Auto-refresh the history table at the selected interval; reschedule on change.
+let histTimer = null;
+function scheduleHistoryRefresh() {
+  if (histTimer) clearInterval(histTimer);
+  const secs = parseInt(document.getElementById("histRefresh").value, 10) || 30;
+  histTimer = setInterval(loadHistory, secs * 1000);
+}
+document.getElementById("histRefresh").addEventListener("change", scheduleHistoryRefresh);
 
 async function loadUsers() {
   const tbody = document.querySelector("#usersTable tbody");
@@ -468,6 +521,7 @@ async function loadUsers() {
 loadHealth(); loadRooms(); loadHistory(); loadUsers();
 setInterval(loadHealth, 30000);   // health strip auto-refresh
 setInterval(loadRooms, 30000);    // live room stats
+scheduleHistoryRefresh();         // watch-history auto-refresh (selectable interval)
 </script>
 </body>
 </html>
