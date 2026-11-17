@@ -258,6 +258,9 @@ class BackendStore:
     def count_users(self):
         return self.query("select count(*) from users")[0][0]
 
+    def delete_user(self, username):
+        self._exec("delete from users where username = " + self.ph, (username,))
+
     # -- watch history ------------------------------------------------------
 
     @property
@@ -316,6 +319,12 @@ class BackendStore:
         sql += " order by last_seen desc limit " + str(int(limit))
         return self.query(sql, params)
 
+    def delete_watch(self, room, file):
+        self._exec(
+            "delete from watch_history where room = " + self.ph + " and file = " + self.ph,
+            (room, file),
+        )
+
     # -- persistent rooms ---------------------------------------------------
 
     def save_room(self, name, playlist, playlist_index, position, last_update):
@@ -337,6 +346,15 @@ class BackendStore:
         return self.query(
             "select name, playlist, playlistIndex, position, lastSavedUpdate from persistent_rooms"
         )
+
+    def load_room(self, name):
+        """Single persistent room row as a tuple, or None when absent."""
+        rows = self.query(
+            "select name, playlist, playlistIndex, position, lastSavedUpdate "
+            "from persistent_rooms where name = " + self.ph,
+            (name,),
+        )
+        return rows[0] if rows else None
 
     # -- permanent rooms ----------------------------------------------------
 

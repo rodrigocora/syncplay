@@ -173,13 +173,13 @@
   <span class="muted" id="histCount"></span>
 </div>
 <table id="histTable">
-  <thead><tr><th>Room</th><th>File</th><th>Size</th><th>Watched (mm:ss)</th><th>%</th><th>Duration (mm:ss)</th><th>Last seen</th></tr></thead>
+  <thead><tr><th>Room</th><th>File</th><th>Size</th><th>Watched (mm:ss)</th><th>%</th><th>Duration (mm:ss)</th><th>Last seen</th><th>Actions</th></tr></thead>
   <tbody></tbody>
 </table>
 
 <h2>Users</h2>
 <table id="usersTable">
-  <thead><tr><th>Username</th><th>First seen</th><th>Last seen</th></tr></thead>
+  <thead><tr><th>Username</th><th>First seen</th><th>Last seen</th><th>Actions</th></tr></thead>
   <tbody></tbody>
 </table>
 
@@ -491,12 +491,21 @@ async function loadHistory() {
       <td class="num">${fmtSize(r.size)}</td><td class="num">${fmtMS(r.watched)}</td>
       <td class="num">${r.percentage != null ? r.percentage.toFixed(1) + "%" : "–"}</td>
       <td class="num">${fmtMS(r.duration)}</td><td class="num">${fmtSeen(r.last_seen)}</td>
+      <td class="row-actions"><button data-act="histdel" data-room="${esc(r.room)}" data-file="${esc(r.file)}" class="danger">Delete</button></td>
     </tr>`).join("");
+    tbody.querySelectorAll('button[data-act="histdel"]').forEach(b => b.addEventListener("click", onHistDelete));
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="7" class="error">${esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="error">${esc(e.message)}</td></tr>`;
   } finally {
     histLoading = false;
   }
+}
+function onHistDelete(e) {
+  const room = e.target.dataset.room, file = e.target.dataset.file;
+  if (!confirm("Delete watch history for " + room + " / " + file + "?")) return;
+  api("/api/history?" + new URLSearchParams({ room, file }), { method: "DELETE" })
+    .then(loadHistory)
+    .catch(err => { document.getElementById("histCount").textContent = "error: " + err.message; });
 }
 document.getElementById("btnHistFilter").addEventListener("click", loadHistory);
 // Auto-refresh the history table at the selected interval; reschedule on change.
@@ -512,10 +521,19 @@ async function loadUsers() {
   const tbody = document.querySelector("#usersTable tbody");
   try {
     const { users } = await api("/api/users");
-    tbody.innerHTML = users.map(u => `<tr><td>${esc(u.username)}</td><td>${fmtTime(u.first_seen)}</td><td>${fmtTime(u.last_seen)}</td></tr>`).join("");
+    tbody.innerHTML = users.map(u => `<tr><td>${esc(u.username)}</td><td>${fmtTime(u.first_seen)}</td><td>${fmtTime(u.last_seen)}</td>
+      <td class="row-actions"><button data-act="userdel" data-name="${esc(u.username)}" class="danger">Delete</button></td></tr>`).join("");
+    tbody.querySelectorAll('button[data-act="userdel"]').forEach(b => b.addEventListener("click", onUserDelete));
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="3" class="error">${esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="error">${esc(e.message)}</td></tr>`;
   }
+}
+function onUserDelete(e) {
+  const name = e.target.dataset.name;
+  if (!confirm("Delete user " + name + "? (watch history is kept)")) return;
+  api("/api/users/" + encodeURIComponent(name), { method: "DELETE" })
+    .then(loadUsers)
+    .catch(err => console.error(err));
 }
 
 loadHealth(); loadRooms(); loadHistory(); loadUsers();

@@ -515,6 +515,11 @@ class RoomDBManager(object):
         rooms = self._store.load_rooms()
         self.loadedRooms(rooms)
 
+    def loadRoom(self, name):
+        # One persistent room (e.g. created through the admin while the server
+        # is running), or None.
+        return self._store.load_room(name)
+
     def loadedRooms(self, rooms):
         self._loadRoomsCallback(rooms)
 
@@ -596,10 +601,26 @@ class RoomManager(object):
         if roomName in self._rooms:
             return self._rooms[roomName]
         else:
-            if RoomPasswordProvider.isControlledRoom(roomName):
-                room = ControlledRoom(roomName, self._roomsDbHandle)
+            # The room may exist in the backend but not in memory yet (e.g.
+            # created or edited through the admin page after the server
+            # started). Load it lazily so a joining client gets its stored
+            # playlist without a server restart.
+            roomDetails = None
+            if self._roomsDbHandle is not None:
+                roomDetails = self._roomsDbHandle.loadRoom(roomName)
+            if roomDetails is not None:
+                if RoomPasswordProvider.isControlledRoom(roomName):
+                    room = ControlledRoom(roomDetails[0], self._roomsDbHandle)
+                else:
+                    room = Room(roomDetails[0], self._roomsDbHandle)
+                room.loadRoom(roomDetails)
+                if roomName in self._permanentRooms:
+                    room.setPermanent(True)
             else:
-                room = Room(roomName, self._roomsDbHandle)
+                if RoomPasswordProvider.isControlledRoom(roomName):
+                    room = ControlledRoom(roomName, self._roomsDbHandle)
+                else:
+                    room = Room(roomName, self._roomsDbHandle)
             self._rooms[roomName] = room
             return room
 

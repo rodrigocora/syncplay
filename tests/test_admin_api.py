@@ -252,6 +252,32 @@ def test_users(client):
     assert users[0]["first_seen"] == 100
 
 
+def test_delete_history_row(client):
+    r = client.request("DELETE", "/api/history?room=movie-room&file=trailer.mp4")
+    assert r.status_code == 200
+    rows = client.get("/api/history?room=movie-room").json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["file"] == "movie.mkv"
+    # deleting again is idempotent (no row to remove)
+    assert client.request("DELETE", "/api/history?room=movie-room&file=trailer.mp4").status_code == 200
+
+
+def test_delete_history_requires_params(client):
+    assert client.request("DELETE", "/api/history").status_code == 422
+    assert client.request("DELETE", "/api/history?room=movie-room").status_code == 422
+
+
+def test_delete_user(client):
+    store = admin._store
+    store.upsert_user("bob", 200)
+    r = client.delete("/api/users/bob")
+    assert r.status_code == 200
+    users = client.get("/api/users").json()["users"]
+    assert "bob" not in {u["username"] for u in users}
+    # no cascade: watch history is untouched
+    assert len(client.get("/api/history").json()["rows"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # Settings (MOTD / persistent-rooms notice)
 # ---------------------------------------------------------------------------

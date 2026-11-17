@@ -405,10 +405,22 @@ def history(
     return {"rows": [_row_to_dict(r) for r in rows]}
 
 
+@app.delete("/api/history", dependencies=[Depends(require_token)])
+def delete_history(room: str = Query(...), file: str = Query(...)):
+    get_store().delete_watch(room, file)
+    return {"ok": True}
+
+
 @app.get("/api/users", dependencies=[Depends(require_token)])
 def users(limit: int = Query(default=100, ge=1, le=1000)):
     rows = get_store().list_users(limit=limit)
     return {"users": [{"username": u, "first_seen": f, "last_seen": last} for u, f, last in rows]}
+
+
+@app.delete("/api/users/{username}", dependencies=[Depends(require_token)])
+def delete_user(username: str):
+    get_store().delete_user(username)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
