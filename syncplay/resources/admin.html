@@ -161,6 +161,7 @@
   <button id="btnHistFilter">Filter</button>
   <label class="note">Refresh:
     <select id="histRefresh">
+      <option value="0">off</option>
       <option value="5">5s</option>
       <option value="10">10s</option>
       <option value="15">15s</option>
@@ -234,11 +235,6 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-function fmtTime(ts) {
-  if (!ts) return "–";
-  const d = new Date(ts * 1000);
-  return d.toLocaleString();
-}
 function fmtDur(s) {
   if (s == null) return "–";
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
@@ -512,8 +508,9 @@ document.getElementById("btnHistFilter").addEventListener("click", loadHistory);
 let histTimer = null;
 function scheduleHistoryRefresh() {
   if (histTimer) clearInterval(histTimer);
-  const secs = parseInt(document.getElementById("histRefresh").value, 10) || 30;
-  histTimer = setInterval(loadHistory, secs * 1000);
+  histTimer = null;
+  const secs = parseInt(document.getElementById("histRefresh").value, 10) || 0;
+  if (secs > 0) histTimer = setInterval(loadHistory, secs * 1000);
 }
 document.getElementById("histRefresh").addEventListener("change", scheduleHistoryRefresh);
 
@@ -521,7 +518,8 @@ async function loadUsers() {
   const tbody = document.querySelector("#usersTable tbody");
   try {
     const { users } = await api("/api/users");
-    tbody.innerHTML = users.map(u => `<tr><td>${esc(u.username)}</td><td>${fmtTime(u.first_seen)}</td><td>${fmtTime(u.last_seen)}</td>
+    tbody.innerHTML = users.map(u => `<tr><td>${esc(u.username)}</td>
+      <td class="num">${fmtSeen(u.first_seen)}</td><td class="num">${fmtSeen(u.last_seen)}</td>
       <td class="row-actions"><button data-act="userdel" data-name="${esc(u.username)}" class="danger">Delete</button></td></tr>`).join("");
     tbody.querySelectorAll('button[data-act="userdel"]').forEach(b => b.addEventListener("click", onUserDelete));
   } catch (e) {
